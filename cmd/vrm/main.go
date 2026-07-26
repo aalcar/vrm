@@ -13,7 +13,9 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/aalcar/vrm/internal/assess"
 	"github.com/aalcar/vrm/internal/config"
+	"github.com/aalcar/vrm/internal/sources"
 	"github.com/aalcar/vrm/internal/store"
 )
 
@@ -77,6 +79,10 @@ func runAssess(ctx context.Context, args []string) error {
 	fset := flag.NewFlagSet("assess", flag.ContinueOnError)
 	service := fset.String("service", "", "service or product being assessed (required)")
 	configPath := fset.String("config", "config.yaml", "path to config file")
+	// Entity resolution is Phase 2, so nothing populates ResolvedEntity yet and BitSight
+	// is keyed on domain. This flag bridges the gap; it stays afterwards as an override
+	// for when the model resolves a domain wrongly.
+	domain := fset.String("domain", "", "vendor domain (until Phase 2 resolves it automatically)")
 	if err := fset.Parse(args); err != nil {
 		return err
 	}
@@ -111,31 +117,66 @@ func runAssess(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// Phase 0 stops here: print the parsed query and confirm the wiring works.
-	// Entity resolution, source fan-out and rendering arrive in later phases.
+	q := sources.Query{Company: company, Service: *service}
+	// Phase 2 replaces this with LLM entity resolution.
+	ent := sources.ResolvedEntity{CanonicalName: company}
+	if d := strings.TrimSpace(*domain); d != "" {
+		ent.Domains = []string{d}
+	}
+
+	report := assess.New(registerSources(cfg, secrets), cfg.Timeouts.PerSource.Duration()).
+		Run(ctx, q, ent)
+
 	fmt.Printf("query\n")
-	fmt.Printf("  company:   %s\n", company)
-	fmt.Printf("  service:   %s\n", *service)
+	fmt.Printf("  company:   %s\n", q.Company)
+	fmt.Printf("  service:   %s\n", q.Service)
 	fmt.Printf("  cache key: %s / %s\n",
-		store.NormalizeKey(company), store.NormalizeKey(*service))
+		store.NormalizeKey(q.Company), store.NormalizeKey(q.Service))
+	if len(ent.Domains) > 0 {
+		fmt.Printf("  domains:   %s\n", strings.Join(ent.Domains, ", "))
+	}
 	fmt.Printf("\nconfig %s\n", *configPath)
 	fmt.Printf("  model:     %s\n", cfg.Model)
 	fmt.Printf("  automated: %s\n", strings.Join(cfg.EnabledSources(), ", "))
-	fmt.Printf("  manual:    %s\n", strings.Join(manualNames(cfg), ", "))
 	fmt.Printf("  optional credentials: NVD=%s CVEDetails=%s\n",
 		present(secrets.HasNVDKey()), present(secrets.HasCVEDetailsKey()))
-	fmt.Printf("\ndatabase\n  connected, schema up to date\n")
-	fmt.Printf("\nno sources are wired up yet (phase 0 — scaffolding).\n")
+
+	// Plain output on purpose — the real renderer is Phase 10.
+	fmt.Printf("\nsections\n")
+	for _, s := range report.Sections {
+		printSection(s)
+	}
 
 	return nil
 }
 
-func manualNames(cfg *config.Config) []string {
-	names := make([]string, 0, len(cfg.ManualSources))
-	for _, m := range cfg.ManualSources {
-		names = append(names, m.Name)
+// registerSources builds the source list from config. A source toggled off in config.yaml
+// is not registered at all, so it produces no section rather than a skipped one.
+func registerSources(cfg *config.Config, secrets *config.Secrets) []sources.Source {
+	var srcs []sources.Source
+	if cfg.Sources[sources.SourceBitSight] {
+		srcs = append(srcs, sources.NewBitSight(secrets.BitsightAPIKey))
 	}
-	return names
+	return srcs
+}
+
+func printSection(s sources.Section) {
+	fmt.Printf("  %-14s %s\n", s.Source, s.Status)
+	switch s.Status {
+	case sources.StatusOK:
+		if r, ok := s.Data.(sources.BitSightRating); ok {
+			// Deterministic values are interpolated verbatim (spec §2.2).
+			fmt.Printf("    rating:  %d (%s) as of %s\n", r.Rating, r.RatingRange, r.RatingDate)
+			fmt.Printf("    matched: %s [%s]\n", r.CompanyName, r.PrimaryDomain)
+			if r.Industry != "" {
+				fmt.Printf("    industry: %s\n", r.Industry)
+			}
+		}
+	case sources.StatusSkipped:
+		fmt.Printf("    %s\n", s.Note)
+	case sources.StatusFailed:
+		fmt.Printf("    error: %s\n", s.Err)
+	}
 }
 
 // present reports credential availability without revealing anything about the value.

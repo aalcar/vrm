@@ -1,0 +1,25 @@
+{
+  "guid": "123e4567-e89b-12d3-a456-426614174000",
+  "name": "Example Corp",
+  "shortname": "Example",
+  "primary_domain": "example.com",
+  "homepage": "https://www.example.com",
+  "industry": "Technology",
+  "industry_slug": "technology",
+  "type": "standard",
+  "ratings": [
+    {
+      "rating_date": "2024-01-01",
+      "rating": 750,
+      "range": "advanced",
+      "rating_color": "#008000"
+    }
+  ],
+  "rating_details": {
+    "patching_cadence": {
+      "name": "Patching Cadence",
+      "grade": "A",
+      "category": "Diligence"
+    }
+  }
+}
