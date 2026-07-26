@@ -1,0 +1,27 @@
+# Local development Postgres for the assessments cache.
+# Credentials are dev-only and match DATABASE_URL in .env.example. Do not reuse them
+# anywhere real — production connection details come from the environment (spec §4).
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: vrm-postgres
+    environment:
+      POSTGRES_USER: vrm
+      POSTGRES_PASSWORD: vrm
+      POSTGRES_DB: vrm
+    ports:
+      # Host port 5433 on purpose: 5432 is commonly already taken by another local
+      # Postgres. Keep this in sync with DATABASE_URL in .env.example.
+      - "5433:5432"
+    volumes:
+      - vrm-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vrm -d vrm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  vrm-pgdata:

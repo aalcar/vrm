@@ -1,0 +1,46 @@
+# Non-secret configuration (spec §12).
+# Secrets are environment-only and must never appear here — see .env.example (spec §4).
+
+# TODO(phase 2): verify this model ID against current Anthropic docs before the first
+# LLM call. Unused in phase 0 — nothing reaches the API yet.
+model: claude-sonnet-4-6
+
+# Toggle any automated source off wholesale. Unknown names are rejected at load.
+sources:
+  bitsight: true
+  nvd: true
+  osv: true
+  cvedetails: false # requires a paid key; skipped without CVEDETAILS_API_KEY
+  fedramp: true
+  caag: true
+
+# Checklist categories an analyst fills in out of band (spec §7). These are the permanent
+# design for non-automatable categories, not stubs — do not write HTTP clients for them.
+manual_sources:
+  - name: ssllabs
+    url: https://www.ssllabs.com/ssltest
+    instruction: "Scan the service hostname; record the grade"
+  - name: openbugbounty
+    url: https://www.openbugbounty.org
+    instruction: "Search the vendor domain; record open/fixed counts"
+
+# Per-source cache lifetimes (spec §11). These signals age very differently.
+# Manual sources have no TTL and are exempt from expiry — see spec §7.
+cache_ttl:
+  bitsight: 24h
+  nvd: 24h
+  osv: 24h
+  cvedetails: 24h
+  fedramp: 168h # authorization status changes rarely
+  caag: 168h # breach list updates infrequently
+  llm_research: 168h # most expensive call in the system
+  resolution: 720h # entity mapping is near-static
+
+timeouts:
+  per_source: 30s
+  total: 90s # a ceiling, not a target; manual sources return instantly
+
+nvd:
+  results_per_cpe: 20
+
+listen: ":8080"
