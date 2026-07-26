@@ -118,10 +118,20 @@ func runAssess(ctx context.Context, args []string) error {
 	}
 
 	q := sources.Query{Company: company, Service: *service}
-	// Phase 2 replaces this with LLM entity resolution.
-	ent := sources.ResolvedEntity{CanonicalName: company}
-	if d := strings.TrimSpace(*domain); d != "" {
-		ent.Domains = []string{d}
+
+	resolution, err := resolve(ctx, cfg, secrets, q)
+	if err != nil {
+		// Fatal, unlike a source failure. Every deterministic source keys off the resolved
+		// entity, so continuing would produce a report in which everything skipped — and
+		// that reads as "nothing to report" rather than "resolution broke".
+		return fmt.Errorf("%w\n\nPass --domain to supply the vendor domain and skip resolution", err)
+	}
+
+	ent := resolution.Entity
+	overridden := strings.TrimSpace(*domain) != ""
+	if overridden {
+		// Analyst override, so a bad mapping can be corrected without editing code.
+		ent.Domains = []string{strings.TrimSpace(*domain)}
 	}
 
 	report := assess.New(registerSources(cfg, secrets), cfg.Timeouts.PerSource.Duration()).
@@ -132,11 +142,12 @@ func runAssess(ctx context.Context, args []string) error {
 	fmt.Printf("  service:   %s\n", q.Service)
 	fmt.Printf("  cache key: %s / %s\n",
 		store.NormalizeKey(q.Company), store.NormalizeKey(q.Service))
-	if len(ent.Domains) > 0 {
-		fmt.Printf("  domains:   %s\n", strings.Join(ent.Domains, ", "))
-	}
+
+	printEntity(ent, resolution.Dropped, overridden)
+
 	fmt.Printf("\nconfig %s\n", *configPath)
-	fmt.Printf("  model:     %s\n", cfg.Model)
+	fmt.Printf("  models:    resolution=%s research=%s\n",
+		cfg.Models.Resolution, cfg.Models.Research)
 	fmt.Printf("  automated: %s\n", strings.Join(cfg.EnabledSources(), ", "))
 	fmt.Printf("  optional credentials: NVD=%s CVEDetails=%s\n",
 		present(secrets.HasNVDKey()), present(secrets.HasCVEDetailsKey()))
@@ -148,6 +159,52 @@ func runAssess(ctx context.Context, args []string) error {
 	}
 
 	return nil
+}
+
+// resolve runs entity resolution under the per-source timeout.
+func resolve(
+	ctx context.Context,
+	cfg *config.Config,
+	secrets *config.Secrets,
+	q sources.Query,
+) (sources.Resolution, error) {
+	resolver := sources.NewResolver(secrets.AnthropicAPIKey, cfg.Models.Resolution)
+
+	resCtx, cancel := context.WithTimeout(ctx, cfg.Timeouts.PerSource.Duration())
+	defer cancel()
+
+	return resolver.Resolve(resCtx, q)
+}
+
+// printEntity surfaces the resolved entity before any results derived from it.
+//
+// Entity resolution is the weakest link in the system: a wrong CPE silently returns another
+// vendor's CVEs and nothing fails. Showing the mapping — and anything validation threw out —
+// is what lets an analyst catch that before acting on it (spec §15).
+func printEntity(ent sources.ResolvedEntity, dropped []string, overridden bool) {
+	fmt.Printf("\nresolved entity\n")
+	fmt.Printf("  canonical: %s\n", ent.CanonicalName)
+	fmt.Printf("  domains:   %s", orNone(ent.Domains))
+	if overridden {
+		fmt.Printf("   (overridden by --domain)")
+	}
+	fmt.Println()
+	fmt.Printf("  cpes:      %s\n", orNone(ent.CPEs))
+	fmt.Printf("  packages:  %s\n", orNone(ent.Packages))
+	fmt.Printf("  aliases:   %s\n", orNone(ent.Aliases))
+
+	// A silently discarded identifier is indistinguishable from a vendor that genuinely
+	// has none, so say what was thrown out and why.
+	for _, d := range dropped {
+		fmt.Printf("  dropped:   %s\n", d)
+	}
+}
+
+func orNone(values []string) string {
+	if len(values) == 0 {
+		return "(none)"
+	}
+	return strings.Join(values, ", ")
 }
 
 // registerSources builds the source list from config. A source toggled off in config.yaml

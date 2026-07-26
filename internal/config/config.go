@@ -75,9 +75,23 @@ type NVD struct {
 	ResultsPerCPE int `yaml:"results_per_cpe"`
 }
 
+// Models holds the per-job model IDs.
+//
+// Entity resolution and checklist research are deliberately separate jobs with separate
+// prompts and output contracts (CLAUDE.md), and they differ by an order of magnitude in
+// cost, so they are configured independently.
+type Models struct {
+	// Resolution maps a company and service to machine identifiers. Short, strict-JSON,
+	// run once per assessment.
+	Resolution string `yaml:"resolution"`
+	// Research answers the fixed checklist with citations. The most expensive call in the
+	// system (spec §11).
+	Research string `yaml:"research"`
+}
+
 // Config is the non-secret configuration from config.yaml (spec §12).
 type Config struct {
-	Model         string              `yaml:"model"`
+	Models        Models              `yaml:"models"`
 	Sources       map[string]bool     `yaml:"sources"`
 	ManualSources []ManualSource      `yaml:"manual_sources"`
 	CacheTTL      map[string]Duration `yaml:"cache_ttl"`
@@ -114,8 +128,11 @@ func Load(path string) (*Config, error) {
 func (c *Config) Validate() error {
 	var errs []error
 
-	if strings.TrimSpace(c.Model) == "" {
-		errs = append(errs, errors.New("model must be set"))
+	if strings.TrimSpace(c.Models.Resolution) == "" {
+		errs = append(errs, errors.New("models.resolution must be set"))
+	}
+	if strings.TrimSpace(c.Models.Research) == "" {
+		errs = append(errs, errors.New("models.research must be set"))
 	}
 
 	// Sorted iteration keeps the error message deterministic across runs.

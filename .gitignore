@@ -36,3 +36,6 @@ config.local.yaml
 *.swp
 *~
 .DS_Store
+
+# Project
+resume-session.txt

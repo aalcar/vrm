@@ -1,0 +1,315 @@
+package sources
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
+)
+
+// This file holds the LLM-backed work. There are exactly two such jobs and they are kept
+// physically separate — different functions, different prompts, different output contracts
+// (spec §2.4):
+//
+//  1. Entity resolution (this phase): company + service -> machine identifiers, strict JSON.
+//  2. Checklist research (phase 7): a fixed question list with citations.
+//
+// Resist any refactor that merges them into one call. Deterministic values from the other
+// sources never pass through either prompt (spec §2.2).
+
+// resolutionMaxTokens bounds the resolution reply. The output is a small JSON object; this
+// is headroom, not a target.
+const resolutionMaxTokens = 2048
+
+// resolutionPrompt is the entity-resolution system prompt.
+//
+// Never log this, and never log the rendered request — CLAUDE.md forbids logging full
+// prompts alongside keys and auth headers.
+const resolutionPrompt = `You map a vendor company and one of its services to the machine identifiers a security analyst needs.
+
+Return only identifiers you are confident are correct for THIS company. This output drives
+automated vulnerability lookups: a wrong identifier silently returns another company's
+security data, which is worse than returning nothing. When you are not confident, return an
+empty array for that field. An empty array is a correct and expected answer.
+
+- canonical_name: the company's full legal or commonly used corporate name.
+- domains: registrable domains the company owns, most authoritative first. Bare hostnames
+  only — no scheme, no path, no port.
+- cpes: CPE 2.3 strings for the named service, in full 13-component form starting "cpe:2.3:".
+  Use the version-agnostic wildcard form unless a specific version was named. Return [] if
+  you do not know the exact registered CPE vendor and product tokens — do not construct one
+  from the company name.
+- packages: names of open-source packages the company publishes. Most vendors publish none;
+  [] is the common and correct answer. Do not list packages that merely mention the company.
+- aliases: former names, subsidiaries, and acquiring entities under which this company's
+  security data may be filed.
+
+Do not explain, qualify, or add commentary. Return the JSON object only.`
+
+// resolutionSchema constrains the reply to exactly the shape ResolvedEntity needs.
+//
+// This is the API's structured-outputs schema, not advice to the model: the response is
+// guaranteed to validate against it, which is what makes the strict-JSON contract in spec
+// §10 enforceable rather than merely requested.
+var resolutionSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"canonical_name": map[string]any{"type": "string"},
+		"domains":        stringArraySchema,
+		"cpes":           stringArraySchema,
+		"packages":       stringArraySchema,
+		"aliases":        stringArraySchema,
+	},
+	"required":             []string{"canonical_name", "domains", "cpes", "packages", "aliases"},
+	"additionalProperties": false,
+}
+
+var stringArraySchema = map[string]any{
+	"type":  "array",
+	"items": map[string]any{"type": "string"},
+}
+
+// Resolver turns an analyst's query into the identifiers the deterministic sources need.
+//
+// It is deliberately NOT a Source: resolution runs once, before the fan-out, and every
+// other source depends on its output (spec §10 step 1).
+type Resolver struct {
+	client anthropic.Client
+	model  string
+}
+
+// ResolverOption configures a Resolver.
+type ResolverOption func(*[]option.RequestOption)
+
+// WithResolverBaseURL overrides the API host. Tests point this at an httptest.Server.
+func WithResolverBaseURL(u string) ResolverOption {
+	return func(opts *[]option.RequestOption) {
+		*opts = append(*opts, option.WithBaseURL(u))
+	}
+}
+
+// WithResolverMaxRetries overrides the SDK's retry count. Tests set it to 0 so a failure
+// surfaces immediately instead of being retried.
+func WithResolverMaxRetries(n int) ResolverOption {
+	return func(opts *[]option.RequestOption) {
+		*opts = append(*opts, option.WithMaxRetries(n))
+	}
+}
+
+// NewResolver builds a Resolver for the given model.
+func NewResolver(apiKey, model string, opts ...ResolverOption) *Resolver {
+	reqOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	for _, opt := range opts {
+		opt(&reqOpts)
+	}
+	return &Resolver{
+		client: anthropic.NewClient(reqOpts...),
+		model:  model,
+	}
+}
+
+// Resolution is the outcome of an entity-resolution call.
+type Resolution struct {
+	Entity ResolvedEntity
+	// Dropped records identifiers the model returned that failed validation. Surfaced in
+	// the report rather than discarded silently: a quietly dropped CPE looks identical to
+	// a vendor that genuinely has none.
+	Dropped []string
+}
+
+// Resolve maps a query to machine identifiers.
+//
+// A malformed or unusable reply is an error, never a partially populated entity — a
+// half-resolved entity would send the wrong identifiers to NVD and produce a confident,
+// wrong report (spec §15).
+func (r *Resolver) Resolve(ctx context.Context, q Query) (Resolution, error) {
+	if strings.TrimSpace(q.Company) == "" {
+		return Resolution{}, errors.New("resolve: company is required")
+	}
+
+	resp, err := r.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     anthropic.Model(r.model),
+		MaxTokens: resolutionMaxTokens,
+		System:    []anthropic.TextBlockParam{{Text: resolutionPrompt}},
+		OutputConfig: anthropic.OutputConfigParam{
+			// A short extraction, not a reasoning task.
+			Effort: anthropic.OutputConfigEffort("low"),
+			Format: anthropic.JSONOutputFormatParam{Schema: resolutionSchema},
+		},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(resolutionQuery(q))),
+		},
+	})
+	if err != nil {
+		// The SDK's error carries status and response body, never the Authorization
+		// header. sanitizeAPIError strips any echo of the key from the body.
+		return Resolution{}, fmt.Errorf("resolve %q: %w", q.Company, sanitizeAPIError(err))
+	}
+
+	// Safety classifiers can decline a request; content is empty or partial when they do.
+	if resp.StopReason == anthropic.StopReasonRefusal {
+		return Resolution{}, fmt.Errorf("resolve %q: the model declined to answer", q.Company)
+	}
+
+	raw, err := firstTextBlock(resp)
+	if err != nil {
+		return Resolution{}, fmt.Errorf("resolve %q: %w", q.Company, err)
+	}
+	return parseResolution(raw)
+}
+
+// resolutionQuery renders the user turn. Kept separate so the prompt constant stays fixed
+// and only this varies.
+func resolutionQuery(q Query) string {
+	if strings.TrimSpace(q.Service) == "" {
+		return fmt.Sprintf("Company: %s", q.Company)
+	}
+	return fmt.Sprintf("Company: %s\nService: %s", q.Company, q.Service)
+}
+
+func firstTextBlock(resp *anthropic.Message) (string, error) {
+	for _, block := range resp.Content {
+		if text, ok := block.AsAny().(anthropic.TextBlock); ok {
+			return text.Text, nil
+		}
+	}
+	return "", errors.New("response contained no text block")
+}
+
+// resolutionReply mirrors the structured-outputs schema. Pointer-free: a missing field
+// decodes to the zero value, which the validation below rejects.
+type resolutionReply struct {
+	CanonicalName string   `json:"canonical_name"`
+	Domains       []string `json:"domains"`
+	CPEs          []string `json:"cpes"`
+	Packages      []string `json:"packages"`
+	Aliases       []string `json:"aliases"`
+}
+
+// parseResolution decodes and validates a resolution reply.
+//
+// Schema-valid is not the same as correct. Structured outputs guarantee the shape; this
+// checks the contents, dropping identifiers that would send a deterministic source looking
+// for the wrong thing.
+func parseResolution(raw string) (Resolution, error) {
+	var reply resolutionReply
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&reply); err != nil {
+		return Resolution{}, fmt.Errorf("parse resolution response: %w", err)
+	}
+
+	name := strings.TrimSpace(reply.CanonicalName)
+	if name == "" {
+		return Resolution{}, errors.New("resolution response has an empty canonical_name")
+	}
+
+	var dropped []string
+	ent := ResolvedEntity{CanonicalName: name}
+
+	for _, d := range reply.Domains {
+		norm, ok := normalizeDomain(d)
+		if !ok {
+			dropped = append(dropped, fmt.Sprintf("domain %q (not a bare hostname)", d))
+			continue
+		}
+		ent.Domains = append(ent.Domains, norm)
+	}
+	for _, c := range reply.CPEs {
+		norm, ok := normalizeCPE(c)
+		if !ok {
+			dropped = append(dropped, fmt.Sprintf("cpe %q (not a well-formed CPE 2.3 string)", c))
+			continue
+		}
+		ent.CPEs = append(ent.CPEs, norm)
+	}
+	// Packages stay opaque this phase. OSV keys on a (name, ecosystem) pair and the spec
+	// does not fix the format; that gets settled when OSV is built (phase 4).
+	for _, p := range reply.Packages {
+		if t := strings.TrimSpace(p); t != "" {
+			ent.Packages = append(ent.Packages, t)
+		}
+	}
+	for _, a := range reply.Aliases {
+		if t := strings.TrimSpace(a); t != "" {
+			ent.Aliases = append(ent.Aliases, t)
+		}
+	}
+
+	return Resolution{Entity: ent, Dropped: dropped}, nil
+}
+
+// normalizeDomain accepts a bare registrable hostname and lowercases it.
+//
+// A scheme, path, port, or whitespace means the model returned a URL rather than a domain;
+// BitSight's search would not match it.
+func normalizeDomain(raw string) (string, bool) {
+	d := strings.ToLower(strings.TrimSpace(raw))
+	d = strings.TrimSuffix(d, ".")
+
+	if d == "" || strings.ContainsAny(d, " \t/\\:@?#") {
+		return "", false
+	}
+	if !strings.Contains(d, ".") || strings.HasPrefix(d, ".") || strings.Contains(d, "..") {
+		return "", false
+	}
+	for _, label := range strings.Split(d, ".") {
+		if label == "" {
+			return "", false
+		}
+	}
+	return d, true
+}
+
+// cpeComponentCount is the number of colon-separated fields in a CPE 2.3 formatted string:
+// the "cpe" prefix, the "2.3" version, and 11 attributes.
+const cpeComponentCount = 13
+
+// normalizeCPE validates a CPE 2.3 formatted string structurally.
+//
+// Deliberately structural only. CLAUDE.md says to ask rather than guess on CPE formats, and
+// a plausible-looking CPE built from a company name is precisely the failure spec §15 warns
+// about — it returns another vendor's CVEs and nothing looks wrong. Anything that is not
+// clearly well-formed is dropped rather than repaired.
+func normalizeCPE(raw string) (string, bool) {
+	c := strings.ToLower(strings.TrimSpace(raw))
+	if !strings.HasPrefix(c, "cpe:2.3:") {
+		return "", false
+	}
+
+	parts := strings.Split(c, ":")
+	if len(parts) != cpeComponentCount {
+		return "", false
+	}
+	// part: application, operating system, or hardware.
+	switch parts[2] {
+	case "a", "o", "h":
+	default:
+		return "", false
+	}
+	// vendor and product must be present; a wildcard in either matches everything, which
+	// would pull in the entire NVD.
+	for _, i := range []int{3, 4} {
+		if parts[i] == "" || parts[i] == "*" || parts[i] == "-" {
+			return "", false
+		}
+	}
+	return c, true
+}
+
+// sanitizeAPIError removes any echo of the API key from an SDK error.
+//
+// The Authorization header is not included in SDK errors, but the response body is, and an
+// auth failure can quote the rejected credential back. Section errors are rendered to
+// analysts, so nothing credential-shaped may survive to that point.
+func sanitizeAPIError(err error) error {
+	var apiErr *anthropic.Error
+	if !errors.As(err, &apiErr) {
+		return err
+	}
+	return fmt.Errorf("Anthropic API returned HTTP %d", apiErr.StatusCode)
+}

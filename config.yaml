@@ -1,9 +1,12 @@
 # Non-secret configuration (spec §12).
 # Secrets are environment-only and must never appear here — see .env.example (spec §4).
 
-# TODO(phase 2): verify this model ID against current Anthropic docs before the first
-# LLM call. Unused in phase 0 — nothing reaches the API yet.
-model: claude-sonnet-4-6
+# The two LLM jobs are kept separate (spec §2.4) and have very different cost profiles, so
+# each gets its own model. Structured outputs — which make the resolution prompt's JSON
+# contract enforceable rather than merely requested — need Sonnet 5 or newer.
+models:
+  resolution: claude-sonnet-5
+  research: claude-sonnet-5 # revisit at phase 7; this is the expensive, web-search-backed call
 
 # Toggle any automated source off wholesale. Unknown names are rejected at load.
 sources:

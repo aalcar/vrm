@@ -11,7 +11,9 @@ import (
 // validConfig mirrors the committed config.yaml. Tests mutate a copy of it to isolate one
 // failure at a time.
 const validConfig = `
-model: claude-sonnet-4-6
+models:
+  resolution: claude-sonnet-5
+  research: claude-sonnet-5
 sources:
   bitsight: true
   nvd: true
@@ -127,8 +129,8 @@ func TestLoadRejects(t *testing.T) {
 		},
 		{
 			name:    "empty model",
-			body:    strings.Replace(validConfig, "model: claude-sonnet-4-6", `model: ""`, 1),
-			wantErr: "model must be set",
+			body:    strings.Replace(validConfig, "  resolution: claude-sonnet-5", `  resolution: ""`, 1),
+			wantErr: "models.resolution must be set",
 		},
 		{
 			name:    "typo'd top-level key",
@@ -151,7 +153,7 @@ func TestLoadRejects(t *testing.T) {
 }
 
 func TestValidateReportsAllProblemsAtOnce(t *testing.T) {
-	body := strings.Replace(validConfig, "model: claude-sonnet-4-6", `model: ""`, 1)
+	body := strings.Replace(validConfig, "  resolution: claude-sonnet-5", `  resolution: ""`, 1)
 	body = strings.Replace(body, "  caag: true", "  caag: true\n  shodan: true", 1)
 	body = strings.Replace(body, "  results_per_cpe: 20", "  results_per_cpe: 0", 1)
 
@@ -159,7 +161,7 @@ func TestValidateReportsAllProblemsAtOnce(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load succeeded, want error")
 	}
-	for _, want := range []string{"model must be set", `unknown source "shodan"`, "results_per_cpe"} {
+	for _, want := range []string{"models.resolution must be set", `unknown source "shodan"`, "results_per_cpe"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error missing %q; got:\n%s", want, err)
 		}
