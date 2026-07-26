@@ -166,11 +166,21 @@ func printSection(s sources.Section) {
 	case sources.StatusOK:
 		if r, ok := s.Data.(sources.BitSightRating); ok {
 			// Deterministic values are interpolated verbatim (spec §2.2).
-			fmt.Printf("    rating:  %d (%s) as of %s\n", r.Rating, r.RatingRange, r.RatingDate)
-			fmt.Printf("    matched: %s [%s]\n", r.CompanyName, r.PrimaryDomain)
+			fmt.Printf("    rating:   %d (%s) as of %s\n", r.Rating, r.RatingRange, r.RatingDate)
+			if r.IndustryMedian != "" {
+				fmt.Printf("    vs industry median: %s\n", r.IndustryMedian)
+			}
+			fmt.Printf("    matched:  %s [%s]\n", r.CompanyName, r.PrimaryDomain)
 			if r.Industry != "" {
 				fmt.Printf("    industry: %s\n", r.Industry)
 			}
+			// Surfaced so a wrong match is caught before it informs a decision.
+			for _, alt := range r.Alternatives {
+				fmt.Printf("    also matched (not used): %s\n", alt)
+			}
+		}
+		for _, c := range s.Citations {
+			fmt.Printf("    source:   %s\n", c.URL)
 		}
 	case sources.StatusSkipped:
 		fmt.Printf("    %s\n", s.Note)

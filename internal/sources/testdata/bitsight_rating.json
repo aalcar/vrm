@@ -1,25 +1,107 @@
 {
-  "guid": "123e4567-e89b-12d3-a456-426614174000",
+  "guid": "11111111-1111-4111-8111-111111111111",
+  "custom_id": null,
   "name": "Example Corp",
+  "description": "Example organization description.",
+  "ipv4_count": 1187,
+  "people_count": 5908,
   "shortname": "Example",
-  "primary_domain": "example.com",
-  "homepage": "https://www.example.com",
   "industry": "Technology",
   "industry_slug": "technology",
-  "type": "standard",
+  "sub_industry": "Computer Software",
+  "sub_industry_slug": "computer_software",
+  "homepage": "https://www.example.com",
+  "primary_domain": "example.com",
+  "type": "CURATED",
+  "display_url": "https://service.bitsighttech.com/app/tprm/company/11111111-1111-4111-8111-111111111111/overview/",
+  "rating_details": {
+    "open_ports": {
+      "name": "Open Ports",
+      "rating": 800,
+      "grade": "A",
+      "percentile": 92,
+      "grade_color": "#239563",
+      "category": "Diligence",
+      "category_order": 1,
+      "beta": false,
+      "order": 10,
+      "display_url": "https://service.bitsighttech.com/app/tprm/company/11111111-1111-4111-8111-111111111111/findings/?impacts_risk_vector_grade=true&risk_vector=open_ports"
+    },
+    "patching_cadence": {
+      "name": "Critical Vulnerability Management",
+      "rating": 820,
+      "grade": "A",
+      "percentile": 100,
+      "grade_color": "#239563",
+      "category": "Diligence",
+      "category_order": 1,
+      "beta": false,
+      "order": 12,
+      "display_url": "https://service.bitsighttech.com/app/tprm/company/11111111-1111-4111-8111-111111111111/findings/?impacts_risk_vector_grade=true&risk_vector=patching_cadence"
+    },
+    "application_security": {
+      "name": "Web Application Headers",
+      "rating": "N/A",
+      "grade": "N/A",
+      "percentile": "N/A",
+      "grade_color": "#AAB8C4",
+      "category": "Diligence",
+      "category_order": 1,
+      "beta": true,
+      "order": 21,
+      "display_url": "https://service.bitsighttech.com/app/tprm/company/11111111-1111-4111-8111-111111111111/findings/?impacts_risk_vector_grade=true&risk_vector=application_security"
+    }
+  },
   "ratings": [
     {
-      "rating_date": "2024-01-01",
+      "rating_date": "2026-07-24",
       "rating": 750,
-      "range": "advanced",
+      "range": "Advanced",
       "rating_color": "#008000"
+    },
+    {
+      "rating_date": "2026-06-24",
+      "rating": 740,
+      "range": "Advanced",
+      "rating_color": "#008000"
+    },
+    {
+      "rating_date": "2025-07-01",
+      "rating": 700,
+      "range": "Intermediate",
+      "rating_color": "#DDA92A"
     }
   ],
-  "rating_details": {
-    "patching_cadence": {
-      "name": "Patching Cadence",
-      "grade": "A",
-      "category": "Diligence"
-    }
-  }
+  "search_count": 3936,
+  "subscription_type": "Continuous Monitoring",
+  "sparkline": "https://api.bitsighttech.com/ratings/v1/companies/11111111-1111-4111-8111-111111",
+  "subscription_type_key": "continuous_monitoring",
+  "subscription_end_date": null,
+  "bulk_email_sender_status": "NONE",
+  "service_provider": false,
+  "customer_monitoring_count": 160,
+  "available_upgrade_types": [],
+  "has_company_tree": true,
+  "has_preferred_contact": false,
+  "is_bundle": false,
+  "rating_industry_median": "below",
+  "primary_company": null,
+  "permissions": {
+    "can_view_ip_attributions": true,
+    "can_download_company_report": true,
+    "can_view_company_reports": true,
+    "can_view_service_providers": true,
+    "can_enable_vendor_access": true,
+    "can_unsubscribe": true
+  },
+  "is_primary": false,
+  "security_grade": null,
+  "in_spm_portfolio": false,
+  "is_mycomp_mysubs_bundle": false,
+  "company_features": [],
+  "compliance_claim": null,
+  "is_csp": false,
+  "related_companies": [],
+  "has_delegated_security_controls": false,
+  "current_rating": 750
 }

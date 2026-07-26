@@ -24,23 +24,29 @@ func fixture(t *testing.T, name string) []byte {
 // The fixture tests are the shape check: if BitSight changes their response, these fail
 // rather than an analyst reading an empty section.
 
+// The fixtures are captured from real BitSight responses with identifying values replaced
+// but the structure left exactly intact — envelope shape, full key set, and the real
+// three-way ambiguity a domain search returns.
+
 func TestParseCompanySearchFixture(t *testing.T) {
 	companies, err := parseCompanySearch(fixture(t, "bitsight_search.json"))
 	if err != nil {
 		t.Fatalf("parseCompanySearch: %v", err)
 	}
-	if len(companies) != 1 {
-		t.Fatalf("got %d companies, want 1", len(companies))
+	// A real domain search returns several fuzzy matches, not one.
+	if len(companies) != 3 {
+		t.Fatalf("got %d companies, want 3", len(companies))
 	}
 	c := companies[0]
-	if c.GUID != "123e4567-e89b-12d3-a456-426614174000" {
+	if c.GUID != "11111111-1111-4111-8111-111111111111" {
 		t.Errorf("GUID = %q", c.GUID)
 	}
 	if c.Name != "Example Corp" || c.PrimaryDomain != "example.com" {
 		t.Errorf("Name/PrimaryDomain = %q / %q", c.Name, c.PrimaryDomain)
 	}
-	if !c.IsPrimary || c.Confidence != "High" {
-		t.Errorf("IsPrimary/Confidence = %v / %q", c.IsPrimary, c.Confidence)
+	// The third result is an unrelated subdomain — the case selection has to reject.
+	if companies[2].PrimaryDomain != "sub.example.com" {
+		t.Errorf("third result domain = %q, want sub.example.com", companies[2].PrimaryDomain)
 	}
 }
 
@@ -50,13 +56,36 @@ func TestParseRatingDetailFixture(t *testing.T) {
 		t.Fatalf("parseRatingDetail: %v", err)
 	}
 	if r.Rating != 750 {
-		t.Errorf("Rating = %d, want 750", r.Rating)
+		t.Errorf("Rating = %d, want 750 (current_rating)", r.Rating)
 	}
-	if r.RatingRange != "advanced" || r.RatingDate != "2024-01-01" {
+	if r.RatingRange != "Advanced" || r.RatingDate != "2026-07-24" {
 		t.Errorf("Range/Date = %q / %q", r.RatingRange, r.RatingDate)
 	}
 	if r.CompanyName != "Example Corp" || r.Industry != "Technology" {
 		t.Errorf("Name/Industry = %q / %q", r.CompanyName, r.Industry)
+	}
+	if r.IndustryMedian != "below" {
+		t.Errorf("IndustryMedian = %q, want below", r.IndustryMedian)
+	}
+	if !strings.HasPrefix(r.ReportURL, "https://service.bitsighttech.com/") {
+		t.Errorf("ReportURL = %q, want a BitSight company page", r.ReportURL)
+	}
+}
+
+// current_rating is authoritative; the series only supplies the date and band.
+func TestParseRatingDetailPrefersCurrentRating(t *testing.T) {
+	body := []byte(`{"guid":"g","name":"N","current_rating":810,"ratings":[
+		{"rating_date":"2026-01-01","rating":790,"range":"Advanced"}]}`)
+
+	r, err := parseRatingDetail(body)
+	if err != nil {
+		t.Fatalf("parseRatingDetail: %v", err)
+	}
+	if r.Rating != 810 {
+		t.Errorf("Rating = %d, want 810 from current_rating", r.Rating)
+	}
+	if r.RatingDate != "2026-01-01" {
+		t.Errorf("RatingDate = %q, want the date from the series", r.RatingDate)
 	}
 }
 
@@ -75,11 +104,28 @@ func TestParseRatingDetailPicksMostRecent(t *testing.T) {
 	}
 }
 
-// A missing ratings array must be loud. Falling back to a zero rating would render "0"
+// A response with no rating at all must be loud. Falling back to zero would render "0"
 // beside genuine scores with nothing to distinguish it.
 func TestParseRatingDetailRejectsMissingRatings(t *testing.T) {
 	if _, err := parseRatingDetail([]byte(`{"guid":"g","name":"N"}`)); err == nil {
-		t.Fatal("parseRatingDetail accepted a response with no ratings")
+		t.Fatal("parseRatingDetail accepted a response with no rating")
+	}
+}
+
+// Trusting the array order would report a years-old score as current if BitSight ever
+// returned the series oldest-first.
+func TestParseRatingDetailSortsRatherThanTrustingOrder(t *testing.T) {
+	body := []byte(`{"guid":"g","name":"N","ratings":[
+		{"rating_date":"2019-01-01","rating":500,"range":"Basic"},
+		{"rating_date":"2026-07-24","rating":750,"range":"Advanced"}]}`)
+
+	r, err := parseRatingDetail(body)
+	if err != nil {
+		t.Fatalf("parseRatingDetail: %v", err)
+	}
+	if r.RatingDate != "2026-07-24" || r.RatingRange != "Advanced" {
+		t.Errorf("got %s / %s, want the newest entry despite it arriving last",
+			r.RatingDate, r.RatingRange)
 	}
 }
 
@@ -100,47 +146,83 @@ func TestParseRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
-// Selection must be deterministic: a different pick means a different company's rating.
-func TestSelectCompanyIsDeterministic(t *testing.T) {
+// Selection must be deterministic: a different pick means a different company's rating,
+// and the number would look perfectly normal either way.
+func TestSelectCompany(t *testing.T) {
 	tests := []struct {
 		name      string
+		domain    string
 		companies []bitsightCompany
 		wantGUID  string
+		wantAlts  int
 	}{
 		{
-			name: "prefers primary over high confidence",
+			name:   "rejects a subdomain in favour of the exact domain",
+			domain: "example.com",
 			companies: []bitsightCompany{
-				{GUID: "a", Confidence: "High"},
-				{GUID: "b", IsPrimary: true},
+				{GUID: "sub", PrimaryDomain: "sub.example.com"},
+				{GUID: "exact", PrimaryDomain: "example.com"},
 			},
-			wantGUID: "b",
+			wantGUID: "exact",
+			wantAlts: 1,
 		},
 		{
-			name: "falls back to high confidence",
+			name:   "keeps BitSight ordering among exact matches",
+			domain: "example.com",
 			companies: []bitsightCompany{
-				{GUID: "a", Confidence: "Low"},
-				{GUID: "b", Confidence: "High"},
+				{GUID: "first", PrimaryDomain: "example.com"},
+				{GUID: "second", PrimaryDomain: "example.com"},
 			},
-			wantGUID: "b",
+			wantGUID: "first",
+			wantAlts: 1,
 		},
 		{
-			name: "falls back to the first result",
+			name:   "falls back to the first result when nothing matches exactly",
+			domain: "example.com",
 			companies: []bitsightCompany{
-				{GUID: "a", Confidence: "Low"},
-				{GUID: "b", Confidence: "Low"},
+				{GUID: "a", PrimaryDomain: "other.example.net"},
+				{GUID: "b", PrimaryDomain: "sub.example.com"},
 			},
 			wantGUID: "a",
+			wantAlts: 1,
+		},
+		{
+			name:      "domain comparison is case-insensitive",
+			domain:    "Example.COM",
+			companies: []bitsightCompany{{GUID: "sub", PrimaryDomain: "sub.example.com"}, {GUID: "exact", PrimaryDomain: "example.com"}},
+			wantGUID:  "exact",
+			wantAlts:  1,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Run repeatedly: an accidental map iteration would show up as flakiness.
+			// Repeat: an accidental map iteration would surface as flakiness.
 			for i := 0; i < 10; i++ {
-				if got := selectCompany(tt.companies); got.GUID != tt.wantGUID {
+				got, alts := selectCompany(tt.companies, tt.domain)
+				if got.GUID != tt.wantGUID {
 					t.Fatalf("selectCompany = %q, want %q", got.GUID, tt.wantGUID)
+				}
+				if len(alts) != tt.wantAlts {
+					t.Fatalf("got %d alternatives, want %d", len(alts), tt.wantAlts)
 				}
 			}
 		})
+	}
+}
+
+// The real failure this guards: searching a vendor domain returns the vendor plus
+// unrelated customer subdomains, and picking one of those rates the wrong organisation.
+func TestSelectCompanyAgainstRealSearchShape(t *testing.T) {
+	companies, err := parseCompanySearch(fixture(t, "bitsight_search.json"))
+	if err != nil {
+		t.Fatalf("parseCompanySearch: %v", err)
+	}
+	got, alts := selectCompany(companies, "example.com")
+	if got.Name != "Example Corp" {
+		t.Errorf("selected %q, want Example Corp", got.Name)
+	}
+	if len(alts) != 2 {
+		t.Errorf("got %d alternatives, want 2 so an analyst can spot a wrong pick", len(alts))
 	}
 }
 
@@ -161,7 +243,7 @@ func TestFetchHappyPath(t *testing.T) {
 			}
 			w.Write(fixture(t, "bitsight_search.json"))
 		default:
-			if !strings.HasSuffix(r.URL.Path, "/123e4567-e89b-12d3-a456-426614174000") {
+			if !strings.HasSuffix(r.URL.Path, "/11111111-1111-4111-8111-111111111111") {
 				t.Errorf("rating path = %q, want the guid from the search", r.URL.Path)
 			}
 			w.Write(fixture(t, "bitsight_rating.json"))
@@ -183,9 +265,17 @@ func TestFetchHappyPath(t *testing.T) {
 	if r.Rating != 750 {
 		t.Errorf("Rating = %d, want 750", r.Rating)
 	}
-	// The queried domain is carried so a bad match is visible to an analyst.
+	// The queried domain and the rejected candidates are carried so a bad match is
+	// visible to an analyst rather than silently producing another company's rating.
 	if r.QueriedDomain != "example.com" {
 		t.Errorf("QueriedDomain = %q", r.QueriedDomain)
+	}
+	if len(r.Alternatives) != 2 {
+		t.Errorf("got %d alternatives, want the 2 other search hits", len(r.Alternatives))
+	}
+	// BitSight's own company page is the one link an analyst can click to verify.
+	if len(sec.Citations) != 1 || !strings.HasPrefix(sec.Citations[0].URL, "https://service.bitsighttech.com/") {
+		t.Errorf("citations = %+v, want the BitSight company page", sec.Citations)
 	}
 }
 

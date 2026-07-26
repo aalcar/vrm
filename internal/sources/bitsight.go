@@ -76,9 +76,21 @@ type BitSightRating struct {
 	PrimaryDomain string
 	Industry      string
 	Rating        int    // BitSight's numeric rating, e.g. 750
-	RatingRange   string // e.g. "advanced"
+	RatingRange   string // e.g. "Intermediate"
 	RatingDate    string // ISO date of the rating, as returned
+
+	// IndustryMedian is BitSight's placement of this rating against the industry median
+	// ("below", "above"). Recorded verbatim; interpreting it is the analyst's job.
+	IndustryMedian string
+	// ReportURL is BitSight's own company page — the one link an analyst can actually
+	// click through to verify this rating.
+	ReportURL string
+
 	QueriedDomain string // the domain that produced this match
+	// Alternatives names the other companies the domain search also returned. A domain
+	// search returns fuzzy matches, including unrelated customer subdomains, so an
+	// analyst needs to see what else was on the list to catch a wrong pick.
+	Alternatives []string
 }
 
 // Fetch resolves the first usable domain to a BitSight company and returns its most recent
@@ -99,14 +111,22 @@ func (b *BitSight) Fetch(ctx context.Context, q Query, ent ResolvedEntity) (Sect
 			"no BitSight company matches domain %q; the vendor may not be rated", domain)), nil
 	}
 
-	company := selectCompany(companies)
+	company, alternatives := selectCompany(companies, domain)
 	rating, err := b.fetchRating(ctx, company.GUID)
 	if err != nil {
 		return Failed(b.Name(), err), err
 	}
 	rating.QueriedDomain = domain
+	rating.Alternatives = alternatives
 
-	return OK(b.Name(), rating), nil
+	var citations []Citation
+	if rating.ReportURL != "" {
+		citations = append(citations, Citation{
+			Title: fmt.Sprintf("BitSight company page — %s", rating.CompanyName),
+			URL:   rating.ReportURL,
+		})
+	}
+	return OK(b.Name(), rating, citations...), nil
 }
 
 // searchByDomain calls GET /ratings/v1/companies/search?domain=<domain>.
@@ -202,13 +222,15 @@ func statusError(code int) error {
 const EnvBitsightKeyName = "BITSIGHT_API_KEY"
 
 // bitsightCompany is one entry from the domain search response.
+//
+// These are the only fields search returns. In particular there is no is_primary and no
+// confidence score here — is_primary exists on the company *detail* response, not on
+// search results — so selection cannot lean on either.
 type bitsightCompany struct {
 	GUID          string `json:"guid"`
 	Name          string `json:"name"`
 	PrimaryDomain string `json:"primary_domain"`
 	Industry      string `json:"industry"`
-	IsPrimary     bool   `json:"is_primary"`
-	Confidence    string `json:"confidence"`
 }
 
 type bitsightSearchResponse struct {
@@ -235,23 +257,33 @@ func parseCompanySearch(body []byte) ([]bitsightCompany, error) {
 	return resp.Results, nil
 }
 
-// selectCompany picks one company from a multi-result search, deterministically.
+// selectCompany picks one company from a multi-result search, deterministically, and
+// returns the names of the others so a wrong pick is visible in the report.
 //
-// Order: a primary company, then one BitSight rates as high confidence, then the first
-// result. This must never vary between runs — picking a different company would silently
-// change which organisation's rating an analyst sees.
-func selectCompany(companies []bitsightCompany) bitsightCompany {
+// A domain search is fuzzy: searching okta.com returns "Okta, Inc.", "Okta Group", and
+// "ritasfranchises.okta.com" — the last being an unrelated customer's subdomain. Taking
+// the first result would sometimes rate the wrong organisation, and the number itself
+// would look perfectly normal (spec §15).
+//
+// So: prefer a company whose primary_domain is exactly the domain searched for, which
+// eliminates subdomain matches; among those keep BitSight's own ordering; fall back to the
+// first result if nothing matches exactly. This must never vary between runs.
+func selectCompany(companies []bitsightCompany, domain string) (bitsightCompany, []string) {
+	chosen := companies[0]
 	for _, c := range companies {
-		if c.IsPrimary {
-			return c
+		if strings.EqualFold(strings.TrimSpace(c.PrimaryDomain), strings.TrimSpace(domain)) {
+			chosen = c
+			break
 		}
 	}
+
+	alternatives := make([]string, 0, len(companies)-1)
 	for _, c := range companies {
-		if strings.EqualFold(c.Confidence, "High") {
-			return c
+		if c.GUID != chosen.GUID {
+			alternatives = append(alternatives, fmt.Sprintf("%s [%s]", c.Name, c.PrimaryDomain))
 		}
 	}
-	return companies[0]
+	return chosen, alternatives
 }
 
 type bitsightRatingEntry struct {
@@ -261,43 +293,64 @@ type bitsightRatingEntry struct {
 }
 
 type bitsightCompanyDetail struct {
-	GUID          string                `json:"guid"`
-	Name          string                `json:"name"`
-	PrimaryDomain string                `json:"primary_domain"`
-	Industry      string                `json:"industry"`
+	GUID          string `json:"guid"`
+	Name          string `json:"name"`
+	PrimaryDomain string `json:"primary_domain"`
+	Industry      string `json:"industry"`
+	// DisplayURL is BitSight's own company page for this vendor.
+	DisplayURL string `json:"display_url"`
+	// IndustryMedian is "below"/"above" relative to the vendor's industry.
+	IndustryMedian string `json:"rating_industry_median"`
+	// CurrentRating is the authoritative current score. Ratings is the full historical
+	// series — several hundred entries — returned most-recent-first.
+	CurrentRating int                   `json:"current_rating"`
 	Ratings       []bitsightRatingEntry `json:"ratings"`
 }
 
-// parseRatingDetail extracts the most recent rating from a company detail response.
+// parseRatingDetail extracts the current rating from a company detail response.
 //
-// A company with no ratings array is treated as a parse failure rather than a zero rating:
-// a rating of 0 rendered next to a real one is indistinguishable to an analyst, and
-// BitSight dropping the field is exactly the shape change this must catch loudly.
+// A response carrying neither current_rating nor any ratings entry is a parse failure, not
+// a zero rating: a 0 rendered beside genuine scores is indistinguishable to an analyst,
+// and BitSight dropping those fields is exactly the shape change this must catch loudly.
 func parseRatingDetail(body []byte) (BitSightRating, error) {
 	var detail bitsightCompanyDetail
 	if err := json.Unmarshal(body, &detail); err != nil {
 		return BitSightRating{}, fmt.Errorf("parse rating response: %w", err)
 	}
-	if len(detail.Ratings) == 0 {
-		return BitSightRating{}, errors.New("rating response contained no ratings")
+	if detail.CurrentRating == 0 && len(detail.Ratings) == 0 {
+		return BitSightRating{}, errors.New(
+			"rating response contained neither current_rating nor any ratings entry")
 	}
 
-	// Most recent first. rating_date is an ISO date, so lexical ordering is chronological.
-	entries := make([]bitsightRatingEntry, len(detail.Ratings))
-	copy(entries, detail.Ratings)
-	sort.SliceStable(entries, func(i, j int) bool {
-		return entries[i].RatingDate > entries[j].RatingDate
-	})
-	latest := entries[0]
+	// The series arrives most-recent-first, but sort rather than trust the order — a
+	// silently reordered response would otherwise report a years-old score as current.
+	// rating_date is an ISO date, so lexical ordering is chronological.
+	var latest bitsightRatingEntry
+	if len(detail.Ratings) > 0 {
+		entries := make([]bitsightRatingEntry, len(detail.Ratings))
+		copy(entries, detail.Ratings)
+		sort.SliceStable(entries, func(i, j int) bool {
+			return entries[i].RatingDate > entries[j].RatingDate
+		})
+		latest = entries[0]
+	}
+
+	// current_rating is authoritative; the series supplies the date and band.
+	rating := detail.CurrentRating
+	if rating == 0 {
+		rating = latest.Rating
+	}
 
 	return BitSightRating{
-		CompanyName:   detail.Name,
-		CompanyGUID:   detail.GUID,
-		PrimaryDomain: detail.PrimaryDomain,
-		Industry:      detail.Industry,
-		Rating:        latest.Rating,
-		RatingRange:   latest.Range,
-		RatingDate:    latest.RatingDate,
+		CompanyName:    detail.Name,
+		CompanyGUID:    detail.GUID,
+		PrimaryDomain:  detail.PrimaryDomain,
+		Industry:       detail.Industry,
+		Rating:         rating,
+		RatingRange:    latest.Range,
+		RatingDate:     latest.RatingDate,
+		IndustryMedian: detail.IndustryMedian,
+		ReportURL:      detail.DisplayURL,
 	}, nil
 }
 
