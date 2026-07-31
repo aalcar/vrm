@@ -2,6 +2,6 @@
   "canonical_name": "Okta, Inc.",
   "domains": ["okta.com", "auth0.com"],
   "cpes": ["cpe:2.3:a:okta:okta:*:*:*:*:*:*:*:*"],
-  "packages": ["@okta/okta-auth-js"],
+  "packages": [{ "ecosystem": "npm", "name": "@okta/okta-auth-js" }],
   "aliases": ["Auth0", "Okta Inc"]
 }

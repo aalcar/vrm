@@ -31,11 +31,25 @@ type Query struct {
 // system, and a wrong CPE silently yields another vendor's CVEs (spec §15).
 type ResolvedEntity struct {
 	CanonicalName string
-	Domains       []string // BitSight
-	CPEs          []string // CPE 2.3 strings, for NVD
-	Packages      []string // OSS package names + ecosystem, for OSV (often empty)
-	Aliases       []string // subsidiaries / former names
+	Domains       []string  // BitSight
+	CPEs          []string  // CPE 2.3 strings, for NVD
+	Packages      []Package // OSS packages, for OSV (usually empty)
+	Aliases       []string  // subsidiaries / former names
 }
+
+// Package is one open-source package a vendor publishes.
+//
+// Ecosystem is not optional garnish: OSV rejects a name-only query outright (HTTP 400), and
+// the same name means different software in different registries. The pair travels together
+// for that reason.
+type Package struct {
+	// Ecosystem is an OSV ecosystem name in OSV's own capitalization, e.g. "npm", "PyPI",
+	// "Go", "crates.io".
+	Ecosystem string
+	Name      string
+}
+
+func (p Package) String() string { return p.Ecosystem + ":" + p.Name }
 
 // Status is the outcome of one source's contribution.
 type Status string

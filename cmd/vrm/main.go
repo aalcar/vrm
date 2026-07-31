@@ -210,7 +210,7 @@ func printEntity(ent sources.ResolvedEntity, dropped []string, domainOverridden,
 		fmt.Printf("   (overridden by --cpe)")
 	}
 	fmt.Println()
-	fmt.Printf("  packages:  %s\n", orNone(ent.Packages))
+	fmt.Printf("  packages:  %s\n", orNone(packageNames(ent.Packages)))
 	fmt.Printf("  aliases:   %s\n", orNone(ent.Aliases))
 
 	// A silently discarded identifier is indistinguishable from a vendor that genuinely
@@ -236,6 +236,16 @@ func parseCPEOverrides(raw string) (accepted, rejected []string) {
 	return accepted, rejected
 }
 
+// packageNames renders packages as ecosystem:name. The ecosystem is shown because the same
+// name means different software in different registries.
+func packageNames(pkgs []sources.Package) []string {
+	out := make([]string, 0, len(pkgs))
+	for _, p := range pkgs {
+		out = append(out, p.String())
+	}
+	return out
+}
+
 func orNone(values []string) string {
 	if len(values) == 0 {
 		return "(none)"
@@ -255,6 +265,15 @@ func registerSources(cfg *config.Config, secrets *config.Secrets) []sources.Sour
 		// so NVD is registered whether or not one is present.
 		srcs = append(srcs, sources.NewNVD(secrets.NVDAPIKey,
 			sources.WithNVDResultsPerCPE(cfg.NVD.ResultsPerCPE)))
+	}
+	if cfg.Sources[sources.SourceOSV] {
+		// OSV is free and unauthenticated.
+		srcs = append(srcs, sources.NewOSV())
+	}
+	if cfg.Sources[sources.SourceCVEDetails] {
+		// Skips without a key; the base URL is deliberately left unset until the endpoint
+		// is confirmed, so a key alone produces a loud failure rather than a guessed path.
+		srcs = append(srcs, sources.NewCVEDetails(secrets.CVEDetailsAPIKey))
 	}
 	return srcs
 }
@@ -277,6 +296,10 @@ func printSection(s sources.Section) {
 			for _, alt := range r.Alternatives {
 				fmt.Printf("    also matched (not used): %s\n", alt)
 			}
+		}
+		if r, ok := s.Data.(sources.OSVResult); ok {
+			printOSV(r)
+			return
 		}
 		if r, ok := s.Data.(sources.NVDResult); ok {
 			printNVD(r)
@@ -325,6 +348,39 @@ func printNVD(r sources.NVDResult) {
 		if v.ScoreSource != "" && !strings.HasPrefix(v.ScoreSource, "Primary") {
 			// A CNA's score is not NVD's own analysis; never let them look alike.
 			fmt.Printf("      scored by: %s\n", v.ScoreSource)
+		}
+	}
+}
+
+// printOSV renders the OSS advisory section.
+//
+// Severities keep OSV's own vocabulary — GitHub's MODERATE is not restated as NVD's MEDIUM —
+// and no numeric score is shown, because OSV supplies a CVSS vector rather than a score and
+// deriving the number would be recomputing a value instead of reporting one.
+func printOSV(r sources.OSVResult) {
+	for _, q := range r.Queries {
+		fmt.Printf("    %s — %d advisories\n", q.Package, q.TotalVulns)
+		if q.Truncated {
+			fmt.Printf("      (truncated; OSV had more pages than were fetched)\n")
+		}
+	}
+
+	s := r.Severity
+	fmt.Printf("    severity: critical=%d high=%d moderate=%d low=%d unrated=%d\n",
+		s.Critical, s.High, s.Moderate, s.Low, s.Unrated)
+
+	for _, v := range r.Vulns {
+		severity := v.Severity
+		if severity == "" {
+			severity = "unrated"
+		}
+		fmt.Printf("    %-22s %-9s %s\n", v.ID, severity, v.URL)
+		// The CVE alias is how an analyst ties this back to the NVD section.
+		if len(v.CVEs) > 0 {
+			fmt.Printf("      also known as: %s\n", strings.Join(v.CVEs, ", "))
+		}
+		if v.CVSSVector != "" {
+			fmt.Printf("      %s: %s\n", v.CVSSType, v.CVSSVector)
 		}
 	}
 }

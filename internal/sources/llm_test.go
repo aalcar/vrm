@@ -40,11 +40,14 @@ func TestParseResolutionAcceptsEmptyArrays(t *testing.T) {
 	}
 	for name, got := range map[string][]string{
 		"Domains": res.Entity.Domains, "CPEs": res.Entity.CPEs,
-		"Packages": res.Entity.Packages, "Aliases": res.Entity.Aliases,
+		"Aliases": res.Entity.Aliases,
 	} {
 		if len(got) != 0 {
 			t.Errorf("%s = %v, want empty", name, got)
 		}
+	}
+	if len(res.Entity.Packages) != 0 {
+		t.Errorf("Packages = %v, want empty", res.Entity.Packages)
 	}
 }
 
@@ -356,5 +359,32 @@ func TestParseCPEOverride(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestParseResolutionValidatesPackages: an ecosystem OSV does not recognize is dropped and
+// reported, because OSV answers HTTP 400 for one it does not know — a single bad entry
+// would otherwise fail the whole section.
+func TestParseResolutionValidatesPackages(t *testing.T) {
+	body := `{"canonical_name":"HashiCorp","domains":[],"cpes":[],"aliases":[],
+	  "packages":[
+	    {"ecosystem":"golang","name":"github.com/hashicorp/vault"},
+	    {"ecosystem":"Debian","name":"vault"},
+	    {"ecosystem":"npm","name":""}
+	  ]}`
+
+	res, err := parseResolution(body)
+	if err != nil {
+		t.Fatalf("parseResolution: %v", err)
+	}
+	if len(res.Entity.Packages) != 1 {
+		t.Fatalf("Packages = %+v, want just the Go one", res.Entity.Packages)
+	}
+	// Informal spellings are canonicalized to OSV's exact capitalization.
+	if got := res.Entity.Packages[0]; got.Ecosystem != "Go" {
+		t.Errorf("ecosystem = %q, want Go", got.Ecosystem)
+	}
+	if len(res.Dropped) != 2 {
+		t.Errorf("Dropped = %v, want both bad entries reported", res.Dropped)
 	}
 }

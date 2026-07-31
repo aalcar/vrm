@@ -47,8 +47,15 @@ empty array for that field. An empty array is a correct and expected answer.
   tokens like okta:access_gateway and okta:verify — okta:okta is not a real CPE. If you do
   not know the registered product token, return []. A fabricated CPE returns either another
   vendor's CVEs or a silent zero, and neither looks wrong in the output.
-- packages: names of open-source packages the company publishes. Most vendors publish none;
-  [] is the common and correct answer. Do not list packages that merely mention the company.
+- packages: open-source packages the company publishes, each as an object with "ecosystem"
+  and "name". ecosystem is the registry the package is published to, spelled exactly as one
+  of: npm, PyPI, Go, Maven, crates.io, RubyGems, NuGet, Packagist, Hex, Pub, CRAN,
+  ConanCenter, Hackage, SwiftURL, vcpkg. name is the exact identifier that registry lists,
+  which is registry-specific: npm scoped packages keep the leading @ and the slash
+  (@okta/okta-auth-js), Go packages are full module paths
+  (github.com/hashicorp/vault), and Maven packages are groupId:artifactId
+  (com.okta.sdk:okta-sdk-api). Most vendors publish none; [] is the common and correct
+  answer. Do not list packages that merely mention or depend on the company.
 - aliases: former names, subsidiaries, and acquiring entities under which this company's
   security data may be filed.
 
@@ -65,7 +72,7 @@ var resolutionSchema = map[string]any{
 		"canonical_name": map[string]any{"type": "string"},
 		"domains":        stringArraySchema,
 		"cpes":           stringArraySchema,
-		"packages":       stringArraySchema,
+		"packages":       packageArraySchema,
 		"aliases":        stringArraySchema,
 	},
 	"required":             []string{"canonical_name", "domains", "cpes", "packages", "aliases"},
@@ -75,6 +82,21 @@ var resolutionSchema = map[string]any{
 var stringArraySchema = map[string]any{
 	"type":  "array",
 	"items": map[string]any{"type": "string"},
+}
+
+// packageArraySchema carries the ecosystem alongside the name. OSV rejects a name-only
+// query, so a bare package name is unusable and the schema does not allow one.
+var packageArraySchema = map[string]any{
+	"type": "array",
+	"items": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"ecosystem": map[string]any{"type": "string"},
+			"name":      map[string]any{"type": "string"},
+		},
+		"required":             []string{"ecosystem", "name"},
+		"additionalProperties": false,
+	},
 }
 
 // Resolver turns an analyst's query into the identifiers the deterministic sources need.
@@ -190,8 +212,11 @@ type resolutionReply struct {
 	CanonicalName string   `json:"canonical_name"`
 	Domains       []string `json:"domains"`
 	CPEs          []string `json:"cpes"`
-	Packages      []string `json:"packages"`
-	Aliases       []string `json:"aliases"`
+	Packages      []struct {
+		Ecosystem string `json:"ecosystem"`
+		Name      string `json:"name"`
+	} `json:"packages"`
+	Aliases []string `json:"aliases"`
 }
 
 // parseResolution decodes and validates a resolution reply.
@@ -231,12 +256,15 @@ func parseResolution(raw string) (Resolution, error) {
 		}
 		ent.CPEs = append(ent.CPEs, norm)
 	}
-	// Packages stay opaque this phase. OSV keys on a (name, ecosystem) pair and the spec
-	// does not fix the format; that gets settled when OSV is built (phase 4).
 	for _, p := range reply.Packages {
-		if t := strings.TrimSpace(p); t != "" {
-			ent.Packages = append(ent.Packages, t)
+		pkg, ok := normalizePackage(p.Ecosystem, p.Name)
+		if !ok {
+			dropped = append(dropped, fmt.Sprintf(
+				"package %q in ecosystem %q (not a recognized OSV package ecosystem)",
+				p.Name, p.Ecosystem))
+			continue
 		}
+		ent.Packages = append(ent.Packages, pkg)
 	}
 	for _, a := range reply.Aliases {
 		if t := strings.TrimSpace(a); t != "" {
@@ -272,6 +300,62 @@ func normalizeDomain(raw string) (string, bool) {
 // cpeComponentCount is the number of colon-separated fields in a CPE 2.3 formatted string:
 // the "cpe" prefix, the "2.3" version, and 11 attributes.
 const cpeComponentCount = 13
+
+// osvEcosystems maps a lowercased ecosystem name to OSV's exact capitalization.
+//
+// Restricted to the language package registries on purpose. OSV also defines distro
+// ecosystems (Debian, Ubuntu, Alpine, Red Hat, …), but those describe distributions
+// repackaging software, not packages a vendor publishes, and most require a release or CPE
+// suffix we could only invent. A vendor's own OSS lives in the registries below.
+//
+// Common informal spellings map to the canonical name: those are deterministic renames, not
+// guesses, and the model reaches for them.
+var osvEcosystems = map[string]string{
+	"npm":            "npm",
+	"pypi":           "PyPI",
+	"pip":            "PyPI",
+	"python":         "PyPI",
+	"go":             "Go",
+	"golang":         "Go",
+	"maven":          "Maven",
+	"crates.io":      "crates.io",
+	"crates":         "crates.io",
+	"cargo":          "crates.io",
+	"rust":           "crates.io",
+	"rubygems":       "RubyGems",
+	"gem":            "RubyGems",
+	"ruby":           "RubyGems",
+	"nuget":          "NuGet",
+	"packagist":      "Packagist",
+	"composer":       "Packagist",
+	"hex":            "Hex",
+	"pub":            "Pub",
+	"cran":           "CRAN",
+	"conancenter":    "ConanCenter",
+	"conan":          "ConanCenter",
+	"hackage":        "Hackage",
+	"opam":           "opam",
+	"swifturl":       "SwiftURL",
+	"swift":          "SwiftURL",
+	"vcpkg":          "vcpkg",
+	"github actions": "GitHub Actions",
+}
+
+// normalizePackage validates an ecosystem/name pair against the registries OSV accepts.
+//
+// An unrecognized ecosystem is dropped rather than passed through: OSV answers HTTP 400 for
+// one it does not know, which would fail the whole section over a single bad entry.
+func normalizePackage(ecosystem, name string) (Package, bool) {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return Package{}, false
+	}
+	canonical, ok := osvEcosystems[strings.ToLower(strings.TrimSpace(ecosystem))]
+	if !ok {
+		return Package{}, false
+	}
+	return Package{Ecosystem: canonical, Name: n}, true
+}
 
 // ParseCPEOverride accepts an analyst-supplied CPE and returns it in full 13-component
 // form.
