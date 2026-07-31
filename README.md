@@ -16,17 +16,33 @@ anything. [`CLAUDE.md`](CLAUDE.md) covers invariants and workflow.
 
 ## Status
 
-Phase 0 (scaffolding) — see spec §13 for the phased plan. The CLI parses a query, loads
-config, validates secrets, and connects to Postgres. No data sources are wired up yet.
+**Phases 0–4 complete**; Phase 5 (manual sources + `vrm set`) is next. See spec §13 for the
+full phased plan.
+
+`vrm assess` today resolves a company + service to machine identifiers via the Anthropic
+API, then queries BitSight, NVD and OSV concurrently and prints a sourced report. FedRAMP
+and CA AG (Phase 6), the manual checklist sources (Phase 5), LLM research (Phase 7),
+caching (Phase 9), and the web UI (Phase 11) are not built yet.
+
+| Source | Keyed on | State |
+|---|---|---|
+| BitSight | domain | ✅ security rating, industry comparison |
+| NVD | CPE 2.3 | ✅ CVEs with CVSS scores + severity counts |
+| OSV | package + ecosystem | ✅ advisories for vendor-published OSS |
+| FedRAMP / CA AG | name | Phase 6 (scrapes) |
+| CVE Details / SSL Labs / Open Bug Bounty | — | Phase 5 (manual, by design) |
 
 ## Setup
 
-Requires Go 1.22+ and Docker.
+Requires Go 1.26+ and Docker.
 
 ```bash
-docker compose up -d          # Postgres for the assessments cache
+docker compose up -d          # Postgres for the assessments cache (host port 5433)
 cp .env.example .env          # then fill in ANTHROPIC_API_KEY and BITSIGHT_API_KEY
 ```
+
+`NVD_API_KEY` is optional and worth setting: it raises NVD's rate limit from 5 to 50
+requests per 30 seconds. Without it NVD still works, just slowly.
 
 Secrets are environment-only and never belong in `config.yaml`. `.env` is gitignored;
 `.env.example` is the committed template. Missing required variables fail at startup with a
@@ -38,6 +54,26 @@ Non-secret settings — model, source toggles, cache TTLs, timeouts — live in 
 
 ```bash
 go run ./cmd/vrm assess "Okta" --service "SSO"
+```
+
+Entity resolution is the weakest link in the pipeline — a wrong CPE silently returns another
+vendor's CVEs — so the resolved identifiers are printed above the results, and two flags let
+you correct a bad mapping without editing code:
+
+```bash
+--domain okta.com                        # override the resolved domain (BitSight)
+--cpe cpe:2.3:a:okta:access_gateway      # override the resolved CPEs (NVD), comma-separated
+```
+
+`--cpe` accepts the short `cpe:2.3:<part>:<vendor>:<product>` form, which is exactly what the
+tool prints when it reports that a resolved CPE isn't in NVD's dictionary:
+
+```
+nvd  failed
+  error: none of the resolved CPEs exist in NVD's CPE dictionary, so a zero CVE count
+  would be meaningless; entity resolution likely invented them
+    cpe:2.3:a:okta:single_sign-on is unknown to NVD; NVD lists these products for that
+    vendor: access_gateway, active_directory_agent, advanced_server_access, ...
 ```
 
 ## Development
@@ -68,6 +104,23 @@ The core is a library; the interfaces are thin front-ends over it.
 
 Data sources are a **fixed** set (spec §6 and §7). Every automated source is a passive
 lookup against an existing database — `vrm` never scans or probes vendor infrastructure.
-Some categories are deliberately **manual**: SSL Labs and Open Bug Bounty appear as
-checklist sections an analyst fills in with `vrm set`, not as HTTP clients to be written
-later.
+Some categories are deliberately **manual**: CVE Details, SSL Labs and Open Bug Bounty
+appear as checklist sections an analyst fills in with `vrm set`, not as HTTP clients to be
+written later. Adding another manual source is a `config.yaml` entry, not code.
+
+### Two things the design keeps insisting on
+
+**Partial failure is normal.** One source failing marks that section and nothing else; the
+assessment never aborts and siblings are never cancelled. A report with a failed section is
+a success. `StatusSkipped` is a first-class outcome too — most vendors publish no OSS, so
+skipping OSV is correct behavior, not a gap.
+
+**"We found nothing" and "we couldn't look" are different claims.** They render identically
+if you're careless. NVD answers `200 / totalResults 0` both for a vendor with no CVEs and
+for a CPE that doesn't exist, so `vrm` confirms the CPE against NVD's dictionary before
+reporting a zero. Identifiers that fail validation are dropped *and named* — a silently
+discarded CPE looks exactly like a vendor that has none.
+
+Deterministic data never passes through the LLM. Ratings, CVE records and registry statuses
+are interpolated verbatim; the model resolves entities and researches the checklist, and
+does not restate, summarize, or recompute anything the other sources returned.

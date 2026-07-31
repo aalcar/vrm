@@ -105,8 +105,9 @@ These shape every design decision below. When in doubt, re-read them.
 ### Secrets & config — read carefully
 - **All secrets come from environment variables. Never hardcode or commit a key.**
   - Required: `BITSIGHT_API_KEY`, `ANTHROPIC_API_KEY`, `DATABASE_URL`.
-  - Optional (source degrades to `StatusSkipped` when absent, never crashes):
-    `NVD_API_KEY` (raises NVD rate limits), `CVEDETAILS_API_KEY` (paid subscription, §6).
+  - Optional (source degrades gracefully when absent, never crashes):
+    `NVD_API_KEY` — raises NVD's rate limit from 5 to 50 requests per 30s. NVD still works
+    without it, just slowly; it is not a skip condition.
 - Provide a `.env.example` with placeholders. Add `.env` to `.gitignore`.
 - Validate required secrets on startup; fail fast with a clear message.
 - Never log secrets, auth headers, or full LLM prompts.
@@ -132,7 +133,6 @@ vrm/
 │   │   ├── bitsight.go      # security rating              (API, licensed)
 │   │   ├── nvd.go           # CVEs by CPE                  (API, free)
 │   │   ├── osv.go           # OSS package vulns            (API, free)
-│   │   ├── cvedetails.go    # supplementary CVE context    (API, paid — optional)
 │   │   ├── fedramp.go       # authorization status         (scrape)
 │   │   ├── caag.go          # CA AG breach notifications   (scrape)
 │   │   ├── manual.go        # config-driven analyst-supplied sources
@@ -163,10 +163,9 @@ All automated sources implement `Source` and run concurrently after entity resol
 
 | Source | Keyed on | Access | Notes |
 |---|---|---|---|
-| **BitSight** | domain | Licensed API key | Pull exact endpoints from BitSight's own API docs. Do not guess paths. |
-| **NVD (NIST)** | CPE 2.3 | Free CVE API 2.0; `NVD_API_KEY` optional | Strict rate limits without a key. Paginate. |
-| **OSV** | package + ecosystem | Free API (`api.osv.dev`) | Keyed on **open-source packages, not companies.** Only meaningful if the vendor publishes OSS packages; otherwise `StatusSkipped`. Do not force a vendor→package mapping. |
-| **CVE Details** | vendor / CVE | **Paid API** (Bearer token; Business/Enterprise tier) | Strictly optional enrichment. Without `CVEDETAILS_API_KEY` → `StatusSkipped`. NVD is the primary CVE source. |
+| **BitSight** | domain | Licensed API key | Pull exact endpoints from BitSight's own API docs. Do not guess paths. A domain search is fuzzy and returns unrelated customer subdomains — prefer an exact `primary_domain` match and surface the alternatives. |
+| **NVD (NIST)** | CPE 2.3 | Free CVE API 2.0; `NVD_API_KEY` optional | Query with **`virtualMatchString`, not `cpeName`** — `cpeName` requires a concrete version and 404s on the version-agnostic CPEs resolution produces. 5 req/30s without a key, 50 with. Paginate. **Zero results is ambiguous** and must be disambiguated against the CPE dictionary — see §15. |
+| **OSV** | package + ecosystem | Free API (`api.osv.dev`) | Keyed on **open-source packages, not companies.** Only meaningful if the vendor publishes OSS packages; otherwise `StatusSkipped`. Do not force a vendor→package mapping. **Ecosystem is mandatory** — a name-only query is rejected with HTTP 400. Severity is a CVSS *vector*, not a score. |
 | **FedRAMP Marketplace** | product / company name | **No official public API** — scrape | The marketplace moved to `fedramp.gov/marketplace` (the old `marketplace.fedramp.gov` host is deprecated and redirects). Target the current host. |
 | **CA Attorney General** | company name | No API — scrape the public breach-notification list | Authoritative for breaches reported in California. Structured and reliable; a deterministic complement to LLM breach research. |
 
@@ -190,14 +189,18 @@ Current manual sources:
 
 | Name | What the analyst does |
 |---|---|
+| `cvedetails` | Search the vendor on CVE Details; record CVE counts and anything NVD missed. |
 | `ssllabs` | Run an SSL Labs test against the service hostname; record the grade. |
 | `openbugbounty` | Search the vendor domain on Open Bug Bounty; record open/fixed counts. |
 
-Both were dropped from automation deliberately. SSL Labs requires email registration, its
-scans take minutes (poll-based, incompatible with a request-time budget), and its free-use
-terms are aimed at operators testing their own infrastructure. Open Bug Bounty exposes only
-an unofficial, sparsely-documented XML endpoint with no stability guarantee. **Do not
-reintroduce either as an automated client.**
+All three were dropped from automation deliberately. SSL Labs requires email registration,
+its scans take minutes (poll-based, incompatible with a request-time budget), and its
+free-use terms are aimed at operators testing their own infrastructure. Open Bug Bounty
+exposes only an unofficial, sparsely-documented XML endpoint with no stability guarantee.
+CVE Details requires a paid Business/Enterprise subscription and publishes no reachable API
+reference, so a client for it could be neither verified nor exercised — its response shape
+would be guesswork, and NVD already covers CVEs as the primary source. **Do not reintroduce
+any of the three as an automated client.**
 
 ### Implementation
 
@@ -327,9 +330,17 @@ type Query struct {
 type ResolvedEntity struct {
     CanonicalName string
     Domains       []string // BitSight
-    CPEs          []string // CPE 2.3 strings, for NVD
-    Packages      []string // OSS package names + ecosystem, for OSV (often empty)
-    Aliases       []string // subsidiaries / former names
+    CPEs          []string  // CPE 2.3 strings, for NVD
+    Packages      []Package // OSS packages, for OSV (usually empty)
+    Aliases       []string  // subsidiaries / former names
+}
+
+// Package is one open-source package a vendor publishes. Ecosystem is not optional
+// garnish: OSV rejects a name-only query outright, and the same name means different
+// software in different registries.
+type Package struct {
+    Ecosystem string // an OSV ecosystem in OSV's capitalization: npm, PyPI, Go, Maven, …
+    Name      string
 }
 
 type Status string
@@ -385,8 +396,8 @@ type Report struct {
 2. **Fan out.** All automated sources (§6), all manual sources (§7), and the research call,
    concurrently, each receiving `Query` and `ResolvedEntity`. Each checks the store first,
    calls out on miss, writes through. Collect every `Section` independently — one failure
-   marks that section only. Sources with no usable input (no CPEs → NVD, no packages → OSV,
-   no credential → CVE Details, no recorded entry → manual) return `StatusSkipped`, not an
+   marks that section only. Sources with no usable input (no domain → BitSight, no CPEs →
+   NVD, no packages → OSV, no recorded entry → manual) return `StatusSkipped`, not an
    error.
 3. **Aggregate** into a `Report` in a stable, documented section order.
 4. **Render** — CLI prints a concise report; web streams sections as they land.
@@ -407,7 +418,6 @@ cache_ttl:
   bitsight:      24h
   nvd:           24h
   osv:           24h
-  cvedetails:    24h
   fedramp:       168h   # authorization status changes rarely
   caag:          168h   # breach list updates infrequently
   llm_research:  168h   # most expensive call in the system
@@ -424,17 +434,24 @@ cache_ttl:
 ## 12. Config schema (non-secret)
 
 ```yaml
-model: claude-sonnet-4-6
+# The two LLM jobs (§2.4) stay separate and have very different cost profiles, so each
+# gets its own model. Structured outputs — which make the resolution prompt's JSON
+# contract enforceable rather than merely requested — need Sonnet 5 or newer.
+models:
+  resolution: claude-sonnet-5
+  research: claude-sonnet-5
 
 sources:                  # toggle any automated source off wholesale
   bitsight: true
   nvd: true
   osv: true
-  cvedetails: false       # requires paid key
   fedramp: true
   caag: true
 
 manual_sources:
+  - name: cvedetails
+    url: https://www.cvedetails.com
+    instruction: "Search the vendor; record CVE counts and anything NVD missed"
   - name: ssllabs
     url: https://www.ssllabs.com/ssltest
     instruction: "Scan the service hostname; record the grade"
@@ -463,43 +480,53 @@ source names and manual entries missing `name`.
 
 Stop after each phase's acceptance criteria for review.
 
-### Phase 0 — Scaffolding
+### Phase 0 — Scaffolding ✅
 Module init, layout, config + env loading with fail-fast validation, Postgres connection,
 migration creating `assessments_cache`, graceful shutdown, `vrm assess "<company>"
 --service "<x>"` printing the parsed query.
 **Done when:** `go build ./...` passes, DB connects, missing required env gives a clear error.
 
-### Phase 1 — Source interface + BitSight
+### Phase 1 — Source interface + BitSight ✅
 Define `sources` types and the `Source` interface. Implement `bitsight.go` (endpoints from
 BitSight's docs). Trivial orchestrator running one source.
 **Done when:** a real rating comes back for a known vendor, and an API error surfaces as
 `StatusFailed` without crashing.
 
-### Phase 2 — LLM entity resolution
+### Phase 2 — LLM entity resolution ✅
 `llm.go` resolution function: strict-JSON prompt → parsed `ResolvedEntity` (domains, CPEs,
 packages, aliases). Empty arrays for unknowns.
 **Done when:** "Okta" + "SSO" yields plausible domains and ≥1 valid CPE; malformed model
 output is rejected cleanly rather than propagated.
 
-### Phase 3 — NVD
+Uses the API's structured-outputs feature (`output_config.format` + `json_schema`), which
+makes the strict-JSON contract guaranteed rather than merely requested. `--domain` and
+`--cpe` override a bad mapping without editing code.
+
+### Phase 3 — NVD ✅
 CVE API 2.0 by resolved CPEs; normalize with severity counts; `StatusSkipped` when no CPEs;
 respect rate limits and use `NVD_API_KEY` when present.
 **Done when:** a vendor with known CVEs returns them with CVSS scores; no-CPE yields
 `StatusSkipped`, not an error.
 
-### Phase 4 — OSV + CVE Details
+Also verifies each CPE against the CPE dictionary when a query returns zero results — see
+§15. Metric selection prefers the newest CVSS revision, then NVD's own Primary analysis over
+a CNA's Secondary, recording which.
+
+### Phase 4 — OSV ✅
 `osv.go` against `api.osv.dev` for resolved packages; `StatusSkipped` when `ent.Packages`
-is empty (the common case — correct behavior, not a bug). `cvedetails.go` as optional
-enrichment; `StatusSkipped` without a key.
+is empty (the common case — correct behavior, not a bug).
 **Done when:** a vendor publishing OSS returns OSV results; a vendor that does not is
-cleanly skipped; CVE Details is skipped without a key and never blocks.
+cleanly skipped.
+
+CVE Details was reclassified as a manual source during this phase (§7): the API is paywalled
+and its reference unreachable, so a client could be neither verified nor exercised.
 
 ### Phase 5 — Manual sources + `vrm set`
 `manual.go` implementing the generic `ManualSource`, constructed from `manual_sources`
 config. `vrm set` subcommand writing a manual row. Store marks manual rows TTL-exempt.
-**Done when:** with no entry, `ssllabs` and `openbugbounty` render as skipped sections
-showing their instruction and URL; after `vrm set`, the recorded value renders verbatim;
-`--no-cache` refreshes automated sources while leaving manual entries intact.
+**Done when:** with no entry, `cvedetails`, `ssllabs` and `openbugbounty` render as skipped
+sections showing their instruction and URL; after `vrm set`, the recorded value renders
+verbatim; `--no-cache` refreshes automated sources while leaving manual entries intact.
 
 ### Phase 6 — FedRAMP + CA AG scrapes
 `fedramp.go` against the current `fedramp.gov/marketplace` host; `caag.go` against the CA
@@ -570,9 +597,16 @@ partials as they land, then the full report.
 
 - **Secrets discipline is a hard requirement, not a nicety.** Env-only, never logged,
   `.env` gitignored, fail-fast on missing required keys. Get this right in Phase 0.
-- **`StatusSkipped` is a first-class, expected outcome.** Most vendors will skip OSV. Many
-  deployments will skip CVE Details. Manual sources start skipped by definition. None of
-  these are failures and none should look like failures in the report.
+- **`StatusSkipped` is a first-class, expected outcome.** Most vendors will skip OSV, and
+  many will skip NVD for want of a registered CPE. Manual sources start skipped by
+  definition. None of these are failures and none should look like failures in the report.
+- **Distinguish "we looked and found nothing" from "we could not look."** These render
+  identically if you are careless, and the first is a far stronger claim. NVD is the live
+  example: it answers `200 / totalResults 0` both for a vendor with no CVEs and for a CPE
+  that does not exist, so a zero is only meaningful once the CPE is confirmed against the
+  CPE dictionary. Both live Okta runs during Phase 3 resolved to a fabricated CPE
+  (`okta:okta`, then `okta:single_sign-on`; NVD's real products are `access_gateway`,
+  `verify`, …), which would otherwise have rendered as a clean bill of health.
 - **Manual sources are not stubs to be "finished later."** They are the permanent design
   for categories that should not be automated. Do not write HTTP clients for them.
 - **Manual entries are analyst data, not cache.** They share a table for convenience only.
@@ -588,20 +622,32 @@ partials as they land, then the full report.
 - **Don't generate narrative.** Record values and citations; leave interpretation, timelines,
   and framing to the analyst's writeup.
 - **Entity resolution is the weakest link.** Surface `ResolvedEntity` in the report so an
-  analyst can catch a bad mapping before acting on wrong CVEs.
+  analyst can catch a bad mapping before acting on wrong CVEs. Prompt wording alone does not
+  fix it — tightening the CPE instruction with a concrete counter-example only moved the
+  fabrication to a different plausible-looking token. Validate identifiers against the
+  source that will consume them, and report what was dropped and why.
+- **Do not restate one scorer's vocabulary in another's.** GitHub rates advisories
+  MODERATE; NVD rates them MEDIUM. They are different scales from different bodies, and
+  silently translating is laundering a value. Likewise, OSV supplies a CVSS *vector* rather
+  than a base score — deriving the number would be recomputing a value instead of reporting
+  one.
 - **Partial failure is the normal case, not an edge case.** A report with a marked failed
   section is a success; an aborted assessment is a bug.
 - **Scrapers rot.** Assume `fedramp.go` and `caag.go` will break; make breakage loud.
 
 ---
 
-## 16. First commands for the implementer
+## 16. Picking up the work
+
+Phases 0–4 are built. To get running:
 
 ```bash
-go mod init github.com/<your-username>/vrm
-go get github.com/jackc/pgx/v5 golang.org/x/net/html gopkg.in/yaml.v3
-cp .env.example .env   # fill BITSIGHT_API_KEY, ANTHROPIC_API_KEY, DATABASE_URL
-# implement Phase 0, verify build + DB connect + fail-fast on missing env, commit.
+docker compose up -d        # Postgres on host port 5433
+cp .env.example .env        # fill BITSIGHT_API_KEY, ANTHROPIC_API_KEY, DATABASE_URL
+go test -race ./...         # the default test command; without -race it proves little
+go run ./cmd/vrm assess "Okta" --service "SSO"
 ```
 
-Start at Phase 0 and stop after each phase's acceptance criteria are met for review.
+Phase 5 (manual sources + `vrm set`) is next. Implement one phase, meet its acceptance
+criteria, confirm each one explicitly, then stop for review — do not roll into the next
+phase. The analyst reviews and commits; do not run `git commit`.

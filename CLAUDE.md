@@ -7,11 +7,15 @@ spec. Where they disagree, the spec wins.
 ## Workflow
 
 Build phase by phase, in spec order. **Implement one phase, meet its acceptance criteria,
-then stop for review.** Do not continue into the next phase unprompted. Small commits, one
-per phase or smaller.
+then stop for review.** Do not continue into the next phase unprompted.
 
 Before saying a phase is done, run the full check (see below) and confirm each acceptance
 criterion explicitly — not "looks good," but which criterion is satisfied by what.
+
+**Do not run `git commit` or `git add`.** When a commit's worth of work is finished, say so
+and stop; the analyst reviews and commits. Suggesting a message is welcome.
+
+Phases 0–4 are complete. Phase 5 (manual sources + `vrm set`) is next.
 
 ## Commands
 
@@ -38,6 +42,17 @@ These come from the spec's guiding principles. Violating one is a bug even if te
 - **Tri-state, never bare `no`.** Research answers are `yes` (with citation),
   `no_evidence_found`, or `not_applicable`. "No evidence found" and "did not happen" are
   different claims and only the first is supportable.
+- **"Found nothing" ≠ "couldn't look."** The same distinction, outside the LLM. NVD answers
+  `200 / totalResults 0` both for a clean vendor and for a CPE that does not exist, so a
+  zero only means something once the CPE is confirmed against the CPE dictionary. Never let
+  an unverifiable zero render as a clean result.
+- **Identifiers are validated against whatever will consume them.** A CPE gets a structural
+  check and a dictionary check; a package ecosystem is checked against OSV's registry list.
+  Anything that fails is dropped *and reported* — a silently discarded identifier looks
+  exactly like a vendor that has none.
+- **Never restate one scorer's vocabulary in another's.** GitHub says MODERATE, NVD says
+  MEDIUM; they are different scales and translating is laundering. OSV gives a CVSS vector,
+  not a score — do not derive the number.
 - **Uncited claims are dropped, not displayed.** A `yes` without a citation naming this
   specific vendor is downgraded to `no_evidence_found` by the parser.
 - **Partial failure is normal.** One source failing marks that section only. Never cancel
@@ -54,9 +69,14 @@ These come from the spec's guiding principles. Violating one is a bug even if te
 
 ## Hard nos
 
-- Do not write an HTTP client for SSL Labs or Open Bug Bounty. They are manual sources by
-  deliberate design (spec §7), not stubs awaiting completion.
+- Do not write an HTTP client for SSL Labs, Open Bug Bounty, or CVE Details. All three are
+  manual sources by deliberate design (spec §7), not stubs awaiting completion. CVE Details
+  moved there in Phase 4 — its API is paywalled and its reference unreachable, so a client
+  could be neither verified nor exercised. `CVEDETAILS_API_KEY` no longer exists.
 - Do not add sources beyond those in spec §6 and §7.
+- Do not use NVD's `cpeName` parameter. It requires a concrete version and returns 404 for
+  the version-agnostic CPEs resolution produces. Use `virtualMatchString`.
+- Do not query OSV without an ecosystem. A name-only query is rejected with HTTP 400.
 - Do not build auth, TLS termination, rate limiting, batch assessment, or trend tracking.
 - Do not scan or probe vendor infrastructure, directly or via a third-party scanner.
 - Do not put secrets in `config.yaml`, commit `.env`, or log keys, auth headers, or full
@@ -78,3 +98,12 @@ These come from the spec's guiding principles. Violating one is a bug even if te
 Ask rather than guess, especially on: BitSight endpoint paths, CPE string formats, and
 the shape of scraped HTML. A wrong CPE silently returns the wrong vendor's CVEs, which is
 worse than a build error because nothing fails.
+
+When an API's docs are unreachable, that is an answer, not an obstacle to route around. A
+source whose response shape cannot be verified should be reclassified as manual or left
+undone — not written against an invented fixture, which produces code that looks tested and
+is not. This is how CVE Details ended up in §7.
+
+Every source's fixtures are **real captured responses**, sanitized, not illustrative
+examples. Making the BitSight fixtures real in Phase 1 exposed two genuine bugs that
+hand-written ones had hidden.
