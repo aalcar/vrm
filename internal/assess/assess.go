@@ -27,6 +27,9 @@ var SectionOrder = []string{
 	sources.SourceBitSight,
 	"nvd",
 	"osv",
+	// cvedetails is a manual source (config.yaml), but it stays here beside the other CVE
+	// sections rather than down with the manual ones — this list is reading order, and a
+	// reader comparing CVE coverage wants the three together.
 	"cvedetails",
 	"fedramp",
 	"caag",

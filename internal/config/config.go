@@ -22,7 +22,9 @@ import (
 
 // knownSources are the automated sources defined in spec §6. The set is fixed: adding a
 // source is a spec change, not a config change.
-var knownSources = []string{"bitsight", "nvd", "osv", "cvedetails", "fedramp", "caag"}
+// cvedetails is deliberately absent: it is a manual source, not an automated one. See the
+// note in config.yaml.
+var knownSources = []string{"bitsight", "nvd", "osv", "fedramp", "caag"}
 
 // nonSourceTTLs are cache_ttl keys that are not automated sources. Entity resolution and
 // the research call are cached too (spec §11), but they are not Source implementations.

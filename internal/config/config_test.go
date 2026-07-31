@@ -18,10 +18,12 @@ sources:
   bitsight: true
   nvd: true
   osv: true
-  cvedetails: false
   fedramp: true
-  caag: true
+  caag: false
 manual_sources:
+  - name: cvedetails
+    url: https://www.cvedetails.com
+    instruction: "Search the vendor; record CVE counts"
   - name: ssllabs
     url: https://www.ssllabs.com/ssltest
     instruction: "Scan the service hostname; record the grade"
@@ -72,10 +74,19 @@ func TestLoadValid(t *testing.T) {
 		t.Errorf("per_source = %v, want %v", cfg.Timeouts.PerSource, want)
 	}
 
-	// cvedetails is toggled off and must not appear.
+	// caag is toggled off and must not appear.
 	got := strings.Join(cfg.EnabledSources(), ",")
-	if want := "bitsight,nvd,osv,fedramp,caag"; got != want {
+	if want := "bitsight,nvd,osv,fedramp"; got != want {
 		t.Errorf("EnabledSources() = %q, want %q", got, want)
+	}
+
+	// cvedetails is a manual source, not an automated one, so it is never an enabled
+	// source and never carries a TTL.
+	if cfg.Sources["cvedetails"] {
+		t.Error("cvedetails must not be an automated source")
+	}
+	if _, ok := cfg.TTL("cvedetails"); ok {
+		t.Error("cvedetails has a TTL; manual entries never expire")
 	}
 
 	// Manual sources are TTL-exempt by design (spec §7).
@@ -92,7 +103,7 @@ func TestLoadRejects(t *testing.T) {
 	}{
 		{
 			name:    "unknown automated source",
-			body:    strings.Replace(validConfig, "  caag: true", "  caag: true\n  shodan: true", 1),
+			body:    strings.Replace(validConfig, "  caag: false", "  caag: false\n  shodan: true", 1),
 			wantErr: `unknown source "shodan"`,
 		},
 		{
@@ -154,7 +165,7 @@ func TestLoadRejects(t *testing.T) {
 
 func TestValidateReportsAllProblemsAtOnce(t *testing.T) {
 	body := strings.Replace(validConfig, "  resolution: claude-sonnet-5", `  resolution: ""`, 1)
-	body = strings.Replace(body, "  caag: true", "  caag: true\n  shodan: true", 1)
+	body = strings.Replace(body, "  caag: false", "  caag: false\n  shodan: true", 1)
 	body = strings.Replace(body, "  results_per_cpe: 20", "  results_per_cpe: 0", 1)
 
 	_, err := Load(writeConfig(t, body))

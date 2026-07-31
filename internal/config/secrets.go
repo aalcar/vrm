@@ -9,11 +9,10 @@ import (
 // Environment variable names. Secrets are environment-only and must never appear in
 // config.yaml (spec §4).
 const (
-	EnvDatabaseURL      = "DATABASE_URL"
-	EnvAnthropicAPIKey  = "ANTHROPIC_API_KEY"
-	EnvBitsightAPIKey   = "BITSIGHT_API_KEY"
-	EnvNVDAPIKey        = "NVD_API_KEY"
-	EnvCVEDetailsAPIKey = "CVEDETAILS_API_KEY"
+	EnvDatabaseURL     = "DATABASE_URL"
+	EnvAnthropicAPIKey = "ANTHROPIC_API_KEY"
+	EnvBitsightAPIKey  = "BITSIGHT_API_KEY"
+	EnvNVDAPIKey       = "NVD_API_KEY"
 )
 
 // Secrets holds credentials read from the environment.
@@ -27,19 +26,13 @@ type Secrets struct {
 	AnthropicAPIKey string
 	BitsightAPIKey  string
 
-	// Optional. When absent the corresponding source returns StatusSkipped rather than
-	// failing (spec §6).
-	NVDAPIKey        string
-	CVEDetailsAPIKey string
+	// Optional. When absent NVD still works, just rate-limited hard (spec §6).
+	NVDAPIKey string
 }
 
 // HasNVDKey reports whether an NVD key is configured. Without one, NVD still works but is
 // rate-limited hard.
 func (s *Secrets) HasNVDKey() bool { return s.NVDAPIKey != "" }
-
-// HasCVEDetailsKey reports whether the paid CVE Details key is configured. Without one the
-// source is skipped entirely.
-func (s *Secrets) HasCVEDetailsKey() bool { return s.CVEDetailsAPIKey != "" }
 
 // MissingEnvError reports required environment variables that were not set. It names the
 // variables only — never any value.
@@ -62,11 +55,10 @@ func LoadSecrets() (*Secrets, error) {
 	get := func(key string) string { return strings.TrimSpace(os.Getenv(key)) }
 
 	s := &Secrets{
-		DatabaseURL:      get(EnvDatabaseURL),
-		AnthropicAPIKey:  get(EnvAnthropicAPIKey),
-		BitsightAPIKey:   get(EnvBitsightAPIKey),
-		NVDAPIKey:        get(EnvNVDAPIKey),
-		CVEDetailsAPIKey: get(EnvCVEDetailsAPIKey),
+		DatabaseURL:     get(EnvDatabaseURL),
+		AnthropicAPIKey: get(EnvAnthropicAPIKey),
+		BitsightAPIKey:  get(EnvBitsightAPIKey),
+		NVDAPIKey:       get(EnvNVDAPIKey),
 	}
 
 	required := []struct {

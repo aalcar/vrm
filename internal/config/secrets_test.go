@@ -11,7 +11,7 @@ func setEnv(t *testing.T, kv map[string]string) {
 	// a test pass locally that would fail on a clean machine.
 	for _, k := range []string{
 		EnvDatabaseURL, EnvAnthropicAPIKey, EnvBitsightAPIKey,
-		EnvNVDAPIKey, EnvCVEDetailsAPIKey,
+		EnvNVDAPIKey,
 	} {
 		t.Setenv(k, "")
 	}
@@ -22,10 +22,9 @@ func setEnv(t *testing.T, kv map[string]string) {
 
 func TestLoadSecretsAllPresent(t *testing.T) {
 	setEnv(t, map[string]string{
-		EnvDatabaseURL:      "postgres://vrm:vrm@localhost:5432/vrm?sslmode=disable",
-		EnvAnthropicAPIKey:  "test-anthropic",
-		EnvBitsightAPIKey:   "test-bitsight",
-		EnvCVEDetailsAPIKey: "test-cvedetails",
+		EnvDatabaseURL:     "postgres://vrm:vrm@localhost:5432/vrm?sslmode=disable",
+		EnvAnthropicAPIKey: "test-anthropic",
+		EnvBitsightAPIKey:  "test-bitsight",
 	})
 
 	s, err := LoadSecrets()
@@ -38,9 +37,6 @@ func TestLoadSecretsAllPresent(t *testing.T) {
 	// Optional credentials drive skip-vs-run decisions, not failures (spec §6).
 	if s.HasNVDKey() {
 		t.Error("HasNVDKey() = true with NVD_API_KEY unset")
-	}
-	if !s.HasCVEDetailsKey() {
-		t.Error("HasCVEDetailsKey() = false with CVEDETAILS_API_KEY set")
 	}
 }
 

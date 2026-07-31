@@ -165,8 +165,7 @@ func runAssess(ctx context.Context, args []string) error {
 	fmt.Printf("  models:    resolution=%s research=%s\n",
 		cfg.Models.Resolution, cfg.Models.Research)
 	fmt.Printf("  automated: %s\n", strings.Join(cfg.EnabledSources(), ", "))
-	fmt.Printf("  optional credentials: NVD=%s CVEDetails=%s\n",
-		present(secrets.HasNVDKey()), present(secrets.HasCVEDetailsKey()))
+	fmt.Printf("  optional credentials: NVD=%s\n", present(secrets.HasNVDKey()))
 
 	// Plain output on purpose — the real renderer is Phase 10.
 	fmt.Printf("\nsections\n")
@@ -269,11 +268,6 @@ func registerSources(cfg *config.Config, secrets *config.Secrets) []sources.Sour
 	if cfg.Sources[sources.SourceOSV] {
 		// OSV is free and unauthenticated.
 		srcs = append(srcs, sources.NewOSV())
-	}
-	if cfg.Sources[sources.SourceCVEDetails] {
-		// Skips without a key; the base URL is deliberately left unset until the endpoint
-		// is confirmed, so a key alone produces a loud failure rather than a guessed path.
-		srcs = append(srcs, sources.NewCVEDetails(secrets.CVEDetailsAPIKey))
 	}
 	return srcs
 }
