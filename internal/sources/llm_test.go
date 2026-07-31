@@ -315,3 +315,46 @@ func TestResolutionPromptContract(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCPEOverride(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		{
+			// The short form is what this tool itself prints when it reports an
+			// unverified CPE, so it must round-trip without hand-typed wildcards.
+			name: "short vendor:product form is padded",
+			in:   "cpe:2.3:a:okta:access_gateway",
+			want: "cpe:2.3:a:okta:access_gateway:*:*:*:*:*:*:*:*",
+			ok:   true,
+		},
+		{
+			name: "full form passes through",
+			in:   "cpe:2.3:a:atlassian:confluence:*:*:*:*:*:*:*:*",
+			want: "cpe:2.3:a:atlassian:confluence:*:*:*:*:*:*:*:*",
+			ok:   true,
+		},
+		{name: "case and spacing normalized", in: "  CPE:2.3:A:Okta:Verify  ",
+			want: "cpe:2.3:a:okta:verify:*:*:*:*:*:*:*:*", ok: true},
+		{name: "wrong prefix rejected", in: "cpe:2.2:a:okta:verify"},
+		{name: "wildcard product rejected", in: "cpe:2.3:a:okta:*"},
+		{name: "bad part rejected", in: "cpe:2.3:x:okta:verify"},
+		{name: "too few components rejected", in: "cpe:2.3:a:okta"},
+		{name: "empty rejected", in: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseCPEOverride(tt.in)
+			if ok != tt.ok {
+				t.Fatalf("ok = %v, want %v (got %q)", ok, tt.ok, got)
+			}
+			if ok && got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

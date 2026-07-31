@@ -40,9 +40,13 @@ empty array for that field. An empty array is a correct and expected answer.
 - domains: registrable domains the company owns, most authoritative first. Bare hostnames
   only — no scheme, no path, no port.
 - cpes: CPE 2.3 strings for the named service, in full 13-component form starting "cpe:2.3:".
-  Use the version-agnostic wildcard form unless a specific version was named. Return [] if
-  you do not know the exact registered CPE vendor and product tokens — do not construct one
-  from the company name.
+  Use the version-agnostic wildcard form unless a specific version was named.
+  The vendor and product tokens must be ones NVD has actually registered. NVD registers a
+  CPE per software product, not per company: the product token names a specific product,
+  and is almost never the company name repeated. For Okta the registered products are
+  tokens like okta:access_gateway and okta:verify — okta:okta is not a real CPE. If you do
+  not know the registered product token, return []. A fabricated CPE returns either another
+  vendor's CVEs or a silent zero, and neither looks wrong in the output.
 - packages: names of open-source packages the company publishes. Most vendors publish none;
   [] is the common and correct answer. Do not list packages that merely mention the company.
 - aliases: former names, subsidiaries, and acquiring entities under which this company's
@@ -268,6 +272,21 @@ func normalizeDomain(raw string) (string, bool) {
 // cpeComponentCount is the number of colon-separated fields in a CPE 2.3 formatted string:
 // the "cpe" prefix, the "2.3" version, and 11 attributes.
 const cpeComponentCount = 13
+
+// ParseCPEOverride accepts an analyst-supplied CPE and returns it in full 13-component
+// form.
+//
+// It deliberately accepts the short cpe:2.3:<part>:<vendor>:<product> prefix as well as the
+// full string, because that prefix is exactly what this tool prints when it reports that a
+// resolved CPE was not in NVD's dictionary. Making an analyst re-type nine wildcards to act
+// on our own error message would be a good way to get the correction typo'd.
+func ParseCPEOverride(raw string) (string, bool) {
+	c := strings.ToLower(strings.TrimSpace(raw))
+	if parts := strings.Split(c, ":"); len(parts) == 5 {
+		c = c + strings.Repeat(":*", cpeComponentCount-5)
+	}
+	return normalizeCPE(c)
+}
 
 // normalizeCPE validates a CPE 2.3 formatted string structurally.
 //

@@ -1,0 +1,199 @@
+{
+  "resultsPerPage": 9,
+  "startIndex": 0,
+  "totalResults": 287,
+  "format": "NVD_CPE",
+  "version": "2.0",
+  "timestamp": "2026-07-30T00:00:00.000",
+  "products": [
+    {
+      "cpe": {
+        "deprecated": false,
+        "cpeName": "cpe:2.3:a:okta:access_gateway:2021.03.6:*:*:*:*:*:*:*",
+        "cpeNameId": "639B76AE-9803-41DE-93F5-0C46BBE0F6A2",
+        "lastModified": "2021-04-19T18:53:17.033",
+        "created": "2021-04-06T17:01:07.850",
+        "titles": [
+          {
+            "title": "Okta Access Gateway 2021.03.6",
+            "lang": "en"
+          }
+        ],
+        "refs": [
+          {
+            "ref": "https://help.okta.com/en/prod/Content/Topics/Settings/Version_Histories/Ver_History_Okta_Access_Gateway.htm",
+            "type": "Change Log"
+          }
+        ]
+      }
+    },
+    {
+      "cpe": {
+        "deprecated": false,
+        "cpeName": "cpe:2.3:a:okta:advanced_server_access:1.51.3:*:*:*:*:*:*:*",
+        "cpeNameId": "8BED4C9C-338E-49A6-806E-8DC96ECC8994",
+        "lastModified": "2021-04-20T16:51:30.143",
+        "created": "2021-04-19T19:04:46.950",
+        "titles": [
+          {
+            "title": "Okta Advanced Server Access 1.51.3",
+            "lang": "en"
+          }
+        ],
+        "refs": [
+          {
+            "ref": "https://www.okta.com/",
+            "type": "Vendor"
+          }
+        ]
+      }
+    },
+    {
+      "cpe": {
+        "deprecated": false,
+        "cpeName": "cpe:2.3:a:okta:verify:6.2.2:*:*:*:*:android:*:*",
+        "cpeNameId": "9DF5BBAF-1C76-4021-8E56-A51DA74B929B",
+        "lastModified": "2021-04-20T16:52:18.177",
+        "created": "2021-04-19T19:07:29.797",
+        "titles": [
+          {
+            "title": "Okta Verify 6.2.2 for Android",
+            "lang": "en"
+          }
+        ],
+        "refs": [
+          {
+            "ref": "https://www.okta.com/",
+            "type": "Vendor"
+          }
+        ]
+      }
+    },
+    {
+      "cpe": {
+        "deprecated": false,
+        "cpeName": "cpe:2.3:a:okta:mobile:4.18.1:*:*:*:*:android:*:*",
+        "cpeNameId": "00BC0C59-B089-4A1F-BE11-77C08C9B237C",
+        "lastModified": "2021-04-20T16:50:05.477",
+        "created": "2021-04-19T19:10:40.080",
+        "titles": [
+          {
+            "title": "Okta Mobile 4.18.1 for Android",
+            "lang": "en"
+          }
+        ],
+        "refs": [
+          {
+            "ref": "https://www.okta.com/",
+            "type": "Vendor"
+          }
+        ]
+      }
+    },
+    {
+      "cpe": {
+        "deprecated": false,
+        "cpeName": "cpe:2.3:a:okta:active_directory_agent:3.8.0:*:*:*:*:*:*:*",
+        "cpeNameId": "A3006FF4-AFD9-484F-BC7B-2203D8A19A1B",
+        "lastModified": "2022-09-08T17:19:52.930",
+        "created": "2022-09-08T17:10:52.800",
+        "titles": [
+          {
+            "title": "Okta Active Directory Agent 3.8.0",
+            "lang": "en"
+          }
+        ],
+        "refs": [
+          {
+            "ref": "https://help.okta.com/en-us/Content/Topics/Directory/ad-agent-new-integration.htm",
+            "type": "Product"
+          }
+        ]
+      }
+    },
+    {
+      "cpe": {
+        "deprecated": false,
+        "cpeName": "cpe:2.3:a:okta:oidc_middleware:-:*:*:*:*:node.js:*:*",
+        "cpeNameId": "20FC2EE5-C02F-4562-B44E-BA74879E52DE",
+        "lastModified": "2023-03-03T18:44:05.190",
+        "created": "2023-01-18T18:46:05.750",
+        "titles": [
+          {
+            "title": "Okta OpenID Connect Middleware for Node.js",
+            "lang": "en"
+          }
+        ],
+        "refs": [
+          {
+            "ref": "https://github.com/okta/okta-oidc-middleware/tags",
+            "type": "Change Log"
+          }
+        ]
+      }
+    },
+    {
+      "cpe": {
+        "deprecated": false,
+        "cpeName": "cpe:2.3:a:okta:imprivata_privileged_access_management:2.3.202112051108:*:*:*:*:*:*:*",
+        "cpeNameId": "01FBC8E4-96ED-40B9-8113-72FAFA9B488B",
+        "lastModified": "2023-12-09T04:57:34.540",
+        "created": "2023-12-09T04:57:34.540",
+        "titles": [
+          {
+            "title": "Okta Imprivata Privileged Access Management 2.3.202112051108",
+            "lang": "en"
+          }
+        ],
+        "refs": [
+          {
+            "ref": "https://www.aegis9.com.au/blog/5/",
+            "type": "Advisory"
+          }
+        ]
+      }
+    },
+    {
+      "cpe": {
+        "deprecated": false,
+        "cpeName": "cpe:2.3:a:okta:ldap_agent:5.18:*:*:*:*:*:*:*",
+        "cpeNameId": "D03D6FAB-5386-40E9-A019-6B44BCE802BE",
+        "lastModified": "2023-12-09T00:30:32.643",
+        "created": "2023-12-09T00:30:32.643",
+        "titles": [
+          {
+            "title": "Okta LDAP Agent 5.18",
+            "lang": "en"
+          }
+        ],
+        "refs": [
+          {
+            "ref": "https://trust.okta.com/security-advisories/okta-ldap-agent-cve-2023-0392/",
+            "type": "Advisory"
+          }
+        ]
+      }
+    },
+    {
+      "cpe": {
+        "deprecated": false,
+        "cpeName": "cpe:2.3:a:okta:java_management_sdk:25.0.2:*:*:*:*:*:*:*",
+        "cpeNameId": "DD72A582-8D57-49CD-8AD6-FADE09869C01",
+        "lastModified": "2026-04-29T16:27:17.160",
+        "created": "2026-04-29T16:27:17.160",
+        "titles": [
+          {
+            "title": "Okta Java Management SDK 25.0.2",
+            "lang": "en"
+          }
+        ],
+        "refs": [
+          {
+            "ref": "https://github.com/okta/okta-sdk-java",
+            "type": "Product"
+          }
+        ]
+      }
+    }
+  ]
+}

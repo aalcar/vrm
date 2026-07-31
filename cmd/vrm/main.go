@@ -61,6 +61,8 @@ Usage:
 
 Flags:
   --service string   service or product being assessed (required)
+  --domain string    vendor domain, overriding entity resolution
+  --cpe string       comma-separated CPEs for NVD, overriding entity resolution
   --config string    path to config file (default "config.yaml")
 
 Secrets come from the environment; copy .env.example to .env to get started.
@@ -82,7 +84,9 @@ func runAssess(ctx context.Context, args []string) error {
 	// Entity resolution is Phase 2, so nothing populates ResolvedEntity yet and BitSight
 	// is keyed on domain. This flag bridges the gap; it stays afterwards as an override
 	// for when the model resolves a domain wrongly.
-	domain := fset.String("domain", "", "vendor domain (until Phase 2 resolves it automatically)")
+	domain := fset.String("domain", "", "vendor domain, overriding entity resolution")
+	cpeFlag := fset.String("cpe", "",
+		"comma-separated CPEs to query NVD with, overriding entity resolution")
 	if err := fset.Parse(args); err != nil {
 		return err
 	}
@@ -134,6 +138,18 @@ func runAssess(ctx context.Context, args []string) error {
 		ent.Domains = []string{strings.TrimSpace(*domain)}
 	}
 
+	cpesOverridden := strings.TrimSpace(*cpeFlag) != ""
+	if cpesOverridden {
+		cpes, bad := parseCPEOverrides(*cpeFlag)
+		if len(bad) > 0 {
+			// Refuse rather than quietly querying fewer CPEs than asked for: a dropped
+			// override would look identical to a vendor with nothing to find.
+			return fmt.Errorf("--cpe: not a well-formed CPE 2.3 string: %s",
+				strings.Join(bad, ", "))
+		}
+		ent.CPEs = cpes
+	}
+
 	report := assess.New(registerSources(cfg, secrets), cfg.Timeouts.PerSource.Duration()).
 		Run(ctx, q, ent)
 
@@ -143,7 +159,7 @@ func runAssess(ctx context.Context, args []string) error {
 	fmt.Printf("  cache key: %s / %s\n",
 		store.NormalizeKey(q.Company), store.NormalizeKey(q.Service))
 
-	printEntity(ent, resolution.Dropped, overridden)
+	printEntity(ent, resolution.Dropped, overridden, cpesOverridden)
 
 	fmt.Printf("\nconfig %s\n", *configPath)
 	fmt.Printf("  models:    resolution=%s research=%s\n",
@@ -181,15 +197,19 @@ func resolve(
 // Entity resolution is the weakest link in the system: a wrong CPE silently returns another
 // vendor's CVEs and nothing fails. Showing the mapping — and anything validation threw out —
 // is what lets an analyst catch that before acting on it (spec §15).
-func printEntity(ent sources.ResolvedEntity, dropped []string, overridden bool) {
+func printEntity(ent sources.ResolvedEntity, dropped []string, domainOverridden, cpesOverridden bool) {
 	fmt.Printf("\nresolved entity\n")
 	fmt.Printf("  canonical: %s\n", ent.CanonicalName)
 	fmt.Printf("  domains:   %s", orNone(ent.Domains))
-	if overridden {
+	if domainOverridden {
 		fmt.Printf("   (overridden by --domain)")
 	}
 	fmt.Println()
-	fmt.Printf("  cpes:      %s\n", orNone(ent.CPEs))
+	fmt.Printf("  cpes:      %s", orNone(ent.CPEs))
+	if cpesOverridden {
+		fmt.Printf("   (overridden by --cpe)")
+	}
+	fmt.Println()
 	fmt.Printf("  packages:  %s\n", orNone(ent.Packages))
 	fmt.Printf("  aliases:   %s\n", orNone(ent.Aliases))
 
@@ -198,6 +218,22 @@ func printEntity(ent sources.ResolvedEntity, dropped []string, overridden bool) 
 	for _, d := range dropped {
 		fmt.Printf("  dropped:   %s\n", d)
 	}
+}
+
+// parseCPEOverrides splits and validates the --cpe flag, returning the accepted CPEs and
+// any entries that were not well-formed.
+func parseCPEOverrides(raw string) (accepted, rejected []string) {
+	for _, part := range strings.Split(raw, ",") {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		if cpe, ok := sources.ParseCPEOverride(part); ok {
+			accepted = append(accepted, cpe)
+		} else {
+			rejected = append(rejected, strings.TrimSpace(part))
+		}
+	}
+	return accepted, rejected
 }
 
 func orNone(values []string) string {
@@ -213,6 +249,12 @@ func registerSources(cfg *config.Config, secrets *config.Secrets) []sources.Sour
 	var srcs []sources.Source
 	if cfg.Sources[sources.SourceBitSight] {
 		srcs = append(srcs, sources.NewBitSight(secrets.BitsightAPIKey))
+	}
+	if cfg.Sources[sources.SourceNVD] {
+		// The key is optional — it raises NVD's rate limit rather than granting access —
+		// so NVD is registered whether or not one is present.
+		srcs = append(srcs, sources.NewNVD(secrets.NVDAPIKey,
+			sources.WithNVDResultsPerCPE(cfg.NVD.ResultsPerCPE)))
 	}
 	return srcs
 }
@@ -236,13 +278,54 @@ func printSection(s sources.Section) {
 				fmt.Printf("    also matched (not used): %s\n", alt)
 			}
 		}
+		if r, ok := s.Data.(sources.NVDResult); ok {
+			printNVD(r)
+			// The per-CVE citations are one line each and would bury everything else;
+			// they are on the CVE lines already.
+			return
+		}
 		for _, c := range s.Citations {
 			fmt.Printf("    source:   %s\n", c.URL)
 		}
 	case sources.StatusSkipped:
 		fmt.Printf("    %s\n", s.Note)
 	case sources.StatusFailed:
-		fmt.Printf("    error: %s\n", s.Err)
+		// Source errors can run to several lines; indent the continuations so the message
+		// stays inside its section rather than reading as top-level output.
+		fmt.Printf("    error: %s\n", strings.ReplaceAll(s.Err, "\n", "\n    "))
+	}
+}
+
+// printNVD renders the CVE section. Counts and scores are interpolated verbatim, with no
+// judgment about what they mean — that is the analyst's job (spec §2.2, CLAUDE.md).
+func printNVD(r sources.NVDResult) {
+	for _, q := range r.Queries {
+		fmt.Printf("    %s — %d CVEs (%s)\n", q.CPE, q.TotalResults, q.Verification)
+		// A CPE NVD has never heard of makes its zero meaningless, so say so here rather
+		// than letting it read as a clean result.
+		if len(q.KnownProducts) > 0 {
+			fmt.Printf("      NVD lists these products for that vendor: %s\n",
+				strings.Join(q.KnownProducts, ", "))
+		}
+	}
+	for _, u := range r.Unqueried {
+		fmt.Printf("    not queried (rate limit or deadline): %s\n", u)
+	}
+
+	s := r.Severity
+	fmt.Printf("    severity: critical=%d high=%d medium=%d low=%d unscored=%d\n",
+		s.Critical, s.High, s.Medium, s.Low, s.Unscored)
+
+	for _, v := range r.CVEs {
+		score := "unscored"
+		if v.Severity != "" {
+			score = fmt.Sprintf("%.1f %s (CVSS %s)", v.BaseScore, v.Severity, v.CVSSVersion)
+		}
+		fmt.Printf("    %-16s %-26s %s  %s\n", v.ID, score, v.Published[:10], v.URL)
+		if v.ScoreSource != "" && !strings.HasPrefix(v.ScoreSource, "Primary") {
+			// A CNA's score is not NVD's own analysis; never let them look alike.
+			fmt.Printf("      scored by: %s\n", v.ScoreSource)
+		}
 	}
 }
 

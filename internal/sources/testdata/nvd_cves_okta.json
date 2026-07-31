@@ -1,0 +1,1620 @@
+{
+  "resultsPerPage": 12,
+  "startIndex": 0,
+  "totalResults": 12,
+  "format": "NVD_CVE",
+  "version": "2.0",
+  "timestamp": "2026-07-31T01:12:10.969",
+  "vulnerabilities": [
+    {
+      "cve": {
+        "id": "CVE-2021-28113",
+        "sourceIdentifier": "cve@mitre.org",
+        "published": "2021-04-02T15:15:13.160",
+        "lastModified": "2026-06-17T03:45:49.290",
+        "vulnStatus": "Modified",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "A command injection vulnerability in the cookieDomain and relayDomain parameters of Okta Access Gateway before 2020.9.3 allows attackers (with admin access to the Okta Access Gateway UI) to execute OS commands as a privileged system account."
+          },
+          {
+            "lang": "es",
+            "value": "Una vulnerabilidad de inyecci\u00f3n de comandos en los par\u00e1metros cookieDomain y relayDomain de Okta Access Gateway versiones anteriores a 2020.9.3, permite a atacantes (con acceso de administrador a la interfaz de usuario de Okta Access Gateway) ejecutar comandos del sistema operativo como una cuenta system privilegiada."
+          }
+        ],
+        "affected": [
+          {
+            "source": "cve@mitre.org",
+            "affectedData": [
+              {
+                "vendor": "n/a",
+                "product": "n/a",
+                "versions": [
+                  {
+                    "version": "n/a",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "cve@mitre.org",
+              "type": "Secondary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:L",
+                "baseScore": 6.7,
+                "baseSeverity": "MEDIUM",
+                "attackVector": "NETWORK",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "HIGH",
+                "userInteraction": "NONE",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "LOW"
+              },
+              "exploitabilityScore": 1.2,
+              "impactScore": 5.5
+            },
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:L",
+                "baseScore": 6.7,
+                "baseSeverity": "MEDIUM",
+                "attackVector": "NETWORK",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "HIGH",
+                "userInteraction": "NONE",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "LOW"
+              },
+              "exploitabilityScore": 1.2,
+              "impactScore": 5.5
+            }
+          ],
+          "cvssMetricV2": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "2.0",
+                "vectorString": "AV:N/AC:L/Au:S/C:C/I:C/A:P",
+                "baseScore": 8.7,
+                "accessVector": "NETWORK",
+                "accessComplexity": "LOW",
+                "authentication": "SINGLE",
+                "confidentialityImpact": "COMPLETE",
+                "integrityImpact": "COMPLETE",
+                "availabilityImpact": "PARTIAL"
+              },
+              "baseSeverity": "HIGH",
+              "exploitabilityScore": 8.0,
+              "impactScore": 9.5,
+              "acInsufInfo": false,
+              "obtainAllPrivilege": false,
+              "obtainUserPrivilege": false,
+              "obtainOtherPrivilege": false,
+              "userInteractionRequired": false
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "nvd@nist.gov",
+            "type": "Primary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-78"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:access_gateway:*:*:*:*:*:*:*:*",
+                    "versionEndIncluding": "2020.8.4",
+                    "matchCriteriaId": "343753F5-E862-458C-A3F8-887579F836A9"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "http://packetstormsecurity.com/files/163428/Okta-Access-Gateway-2020.5.5-Authenticated-Remote-Root.html",
+            "source": "cve@mitre.org",
+            "tags": [
+              "Exploit",
+              "Third Party Advisory",
+              "VDB Entry"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2022-24295",
+        "sourceIdentifier": "psirt@okta.com",
+        "published": "2022-02-21T18:15:09.187",
+        "lastModified": "2026-06-17T04:31:34.003",
+        "vulnStatus": "Modified",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "Okta Advanced Server Access Client for Windows prior to version 1.57.0 was found to be vulnerable to command injection via a specially crafted URL."
+          },
+          {
+            "lang": "es",
+            "value": "Se ha detectado que Okta Advanced Server Access Client para Windows versiones anteriores a 1.57.0, es vulnerable a una inyecci\u00f3n de comandos por medio de una URL especialmente dise\u00f1ada"
+          }
+        ],
+        "affected": [
+          {
+            "source": "psirt@okta.com",
+            "affectedData": [
+              {
+                "vendor": "Okta",
+                "product": "Okta Advanced Server Access Client",
+                "versions": [
+                  {
+                    "version": "Prior to version 1.57.0",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+                "baseScore": 8.8,
+                "baseSeverity": "HIGH",
+                "attackVector": "NETWORK",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "NONE",
+                "userInteraction": "REQUIRED",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "HIGH"
+              },
+              "exploitabilityScore": 2.8,
+              "impactScore": 5.9
+            }
+          ],
+          "cvssMetricV2": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "2.0",
+                "vectorString": "AV:N/AC:M/Au:N/C:P/I:P/A:P",
+                "baseScore": 6.8,
+                "accessVector": "NETWORK",
+                "accessComplexity": "MEDIUM",
+                "authentication": "NONE",
+                "confidentialityImpact": "PARTIAL",
+                "integrityImpact": "PARTIAL",
+                "availabilityImpact": "PARTIAL"
+              },
+              "baseSeverity": "MEDIUM",
+              "exploitabilityScore": 8.6,
+              "impactScore": 6.4,
+              "acInsufInfo": false,
+              "obtainAllPrivilege": false,
+              "obtainUserPrivilege": false,
+              "obtainOtherPrivilege": false,
+              "userInteractionRequired": true
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "nvd@nist.gov",
+            "type": "Primary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-94"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:advanced_server_access_client_for_windows:*:*:*:*:*:*:*:*",
+                    "versionEndExcluding": "1.57.0",
+                    "matchCriteriaId": "18F7E188-AC50-46ED-8CA3-FF8C77DD8273"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://trust.okta.com/security-advisories/okta-advanced-server-access-client-cve-2022-24295",
+            "source": "psirt@okta.com",
+            "tags": [
+              "Vendor Advisory"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2022-1030",
+        "sourceIdentifier": "psirt@okta.com",
+        "published": "2022-03-23T20:15:10.757",
+        "lastModified": "2026-06-17T04:21:40.387",
+        "vulnStatus": "Modified",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "Okta Advanced Server Access Client for Linux and macOS prior to version 1.58.0 was found to be vulnerable to command injection via a specially crafted URL. An attacker, who has knowledge of a valid team name for the victim and also knows a valid target host where the user has access, can execute commands on the local system."
+          },
+          {
+            "lang": "es",
+            "value": "Se ha detectado que el cliente de acceso al servidor avanzado de Okta para Linux y macOS versiones anteriores a 1.58.0, era vulnerable a una inyecci\u00f3n de comandos por medio de una URL especialmente dise\u00f1ada. Un atacante, que presenta conocimiento de un nombre de equipo v\u00e1lido para la v\u00edctima y tambi\u00e9n conoce un host de destino v\u00e1lido donde el usuario presenta acceso, puede ejecutar comandos en el sistema local"
+          }
+        ],
+        "affected": [
+          {
+            "source": "psirt@okta.com",
+            "affectedData": [
+              {
+                "vendor": "Okta",
+                "product": "Advanced Server Access Client",
+                "versions": [
+                  {
+                    "version": "Prior to version 1.58.0",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+                "baseScore": 8.8,
+                "baseSeverity": "HIGH",
+                "attackVector": "NETWORK",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "NONE",
+                "userInteraction": "REQUIRED",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "HIGH"
+              },
+              "exploitabilityScore": 2.8,
+              "impactScore": 5.9
+            }
+          ],
+          "cvssMetricV2": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "2.0",
+                "vectorString": "AV:N/AC:M/Au:N/C:C/I:C/A:C",
+                "baseScore": 9.3,
+                "accessVector": "NETWORK",
+                "accessComplexity": "MEDIUM",
+                "authentication": "NONE",
+                "confidentialityImpact": "COMPLETE",
+                "integrityImpact": "COMPLETE",
+                "availabilityImpact": "COMPLETE"
+              },
+              "baseSeverity": "HIGH",
+              "exploitabilityScore": 8.6,
+              "impactScore": 10.0,
+              "acInsufInfo": false,
+              "obtainAllPrivilege": false,
+              "obtainUserPrivilege": false,
+              "obtainOtherPrivilege": false,
+              "userInteractionRequired": true
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "nvd@nist.gov",
+            "type": "Primary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-78"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "operator": "AND",
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:advanced_server_access:*:*:*:*:*:*:*:*",
+                    "versionEndExcluding": "1.58.0",
+                    "matchCriteriaId": "94D9EAFF-4B41-400F-9A5E-9AEF46C36EB5"
+                  }
+                ]
+              },
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": false,
+                    "criteria": "cpe:2.3:o:apple:macos:-:*:*:*:*:*:*:*",
+                    "matchCriteriaId": "387021A0-AF36-463C-A605-32EA7DAC172E"
+                  },
+                  {
+                    "vulnerable": false,
+                    "criteria": "cpe:2.3:o:linux:linux_kernel:-:*:*:*:*:*:*:*",
+                    "matchCriteriaId": "703AF700-7A70-47E2-BC3A-7FD03B3CA9C1"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://trust.okta.com/security-advisories/okta-advanced-server-access-client-cve-2022-1030",
+            "source": "psirt@okta.com",
+            "tags": [
+              "Vendor Advisory"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2022-1697",
+        "sourceIdentifier": "psirt@okta.com",
+        "published": "2022-09-06T18:15:10.493",
+        "lastModified": "2026-06-17T04:22:56.347",
+        "vulnStatus": "Modified",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "Okta Active Directory Agent versions 3.8.0 through 3.11.0 installed the Okta AD Agent Update Service using an unquoted path. Note: To remediate this vulnerability, you must uninstall Okta Active Directory Agent and reinstall Okta Active Directory Agent 3.12.0 or greater per the documentation."
+          },
+          {
+            "lang": "es",
+            "value": "Las versiones 3.8.0 a 3.11.0 del Agente de Okta Active Directory instalan el Servicio de Actualizaci\u00f3n del Agente de Okta AD utilizando una ruta no citada. Nota: Para corregir esta vulnerabilidad, debe desinstalar el Agente de Okta Active Directory y volver a instalar el Agente de Okta Active Directory 3.12.0 o superior seg\u00fan la documentaci\u00f3n"
+          }
+        ],
+        "affected": [
+          {
+            "source": "psirt@okta.com",
+            "affectedData": [
+              {
+                "vendor": "Okta",
+                "product": "Okta Active Directory Agent",
+                "versions": [
+                  {
+                    "version": "3.8.0, 3.9.0, 3.10.0, 3.11.0",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:L/AC:H/PR:H/UI:N/S:U/C:L/I:L/A:L",
+                "baseScore": 3.9,
+                "baseSeverity": "LOW",
+                "attackVector": "LOCAL",
+                "attackComplexity": "HIGH",
+                "privilegesRequired": "HIGH",
+                "userInteraction": "NONE",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "LOW",
+                "integrityImpact": "LOW",
+                "availabilityImpact": "LOW"
+              },
+              "exploitabilityScore": 0.5,
+              "impactScore": 3.4
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "nvd@nist.gov",
+            "type": "Primary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-428"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:active_directory_agent:3.8.0:*:*:*:*:*:*:*",
+                    "matchCriteriaId": "442B7B70-70D7-488D-BAC4-7B060CCB1388"
+                  },
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:active_directory_agent:3.9.0:*:*:*:*:*:*:*",
+                    "matchCriteriaId": "E0B869CF-7CFB-4288-B21B-C959136BE293"
+                  },
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:active_directory_agent:3.10.0:*:*:*:*:*:*:*",
+                    "matchCriteriaId": "07931E64-69B0-4081-99A8-9FF8E6989E2C"
+                  },
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:active_directory_agent:3.11.0:*:*:*:*:*:*:*",
+                    "matchCriteriaId": "C8403CAC-AA6E-4B65-B02D-0DA097D9E53B"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://help.okta.com/en-us/Content/Topics/Directory/ad-agent-update.htm",
+            "source": "psirt@okta.com",
+            "tags": [
+              "Vendor Advisory"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2022-3145",
+        "sourceIdentifier": "psirt@okta.com",
+        "published": "2023-01-12T19:15:24.007",
+        "lastModified": "2026-06-17T04:58:57.070",
+        "vulnStatus": "Modified",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "An open redirect vulnerability exists in Okta OIDC Middleware prior to version 5.0.0 allowing an attacker to redirect a user to an arbitrary URL."
+          },
+          {
+            "lang": "es",
+            "value": "Existe una vulnerabilidad de redireccionamiento abierto en Okta OIDC Middleware anterior a la versi\u00f3n 5.0.0 que permite a un atacante redirigir a un usuario a una URL arbitraria."
+          }
+        ],
+        "affected": [
+          {
+            "source": "psirt@okta.com",
+            "affectedData": [
+              {
+                "vendor": "Okta",
+                "product": "Okta OIDC Middleware",
+                "versions": [
+                  {
+                    "version": "prior to 5.0.0",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:L/A:N",
+                "baseScore": 4.7,
+                "baseSeverity": "MEDIUM",
+                "attackVector": "NETWORK",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "NONE",
+                "userInteraction": "REQUIRED",
+                "scope": "CHANGED",
+                "confidentialityImpact": "NONE",
+                "integrityImpact": "LOW",
+                "availabilityImpact": "NONE"
+              },
+              "exploitabilityScore": 2.8,
+              "impactScore": 1.4
+            },
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "type": "Secondary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:L/A:N",
+                "baseScore": 4.7,
+                "baseSeverity": "MEDIUM",
+                "attackVector": "NETWORK",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "NONE",
+                "userInteraction": "REQUIRED",
+                "scope": "CHANGED",
+                "confidentialityImpact": "NONE",
+                "integrityImpact": "LOW",
+                "availabilityImpact": "NONE"
+              },
+              "exploitabilityScore": 2.8,
+              "impactScore": 1.4
+            }
+          ],
+          "ssvcV203": [
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "ssvcData": {
+                "timestamp": "2025-04-08T13:36:52.687825Z",
+                "id": "CVE-2022-3145",
+                "options": [
+                  {
+                    "exploitation": "none"
+                  },
+                  {
+                    "automatable": "no"
+                  },
+                  {
+                    "technicalImpact": "partial"
+                  }
+                ],
+                "role": "CISA Coordinator",
+                "version": "2.0.3"
+              }
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "nvd@nist.gov",
+            "type": "Primary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-601"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:oidc_middleware:*:*:*:*:*:node.js:*:*",
+                    "versionEndExcluding": "5.0.0",
+                    "matchCriteriaId": "A718D4D7-985F-466E-B29B-E9315F373B7F"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://github.com/okta/okta-oidc-middleware/security/advisories/GHSA-58h4-9m7m-j9m4",
+            "source": "psirt@okta.com",
+            "tags": [
+              "Third Party Advisory"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2023-0093",
+        "sourceIdentifier": "psirt@okta.com",
+        "published": "2023-03-06T21:15:10.933",
+        "lastModified": "2026-06-17T05:24:45.880",
+        "vulnStatus": "Modified",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "Okta Advanced Server Access Client versions 1.13.1 through 1.65.0 are vulnerable to command injection due to the third party library webbrowser. An outdated library, webbrowser, used by the ASA client was found to be vulnerable to command injection. To exploit this issue, an attacker would need to phish the user to enter an attacker controlled server URL during enrollment."
+          }
+        ],
+        "affected": [
+          {
+            "source": "psirt@okta.com",
+            "affectedData": [
+              {
+                "vendor": "Okta",
+                "product": "Advanced Server Access",
+                "versions": [
+                  {
+                    "version": "1.13.1 through 1.65.0",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+                "baseScore": 8.8,
+                "baseSeverity": "HIGH",
+                "attackVector": "NETWORK",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "NONE",
+                "userInteraction": "REQUIRED",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "HIGH"
+              },
+              "exploitabilityScore": 2.8,
+              "impactScore": 5.9
+            },
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "type": "Secondary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+                "baseScore": 8.8,
+                "baseSeverity": "HIGH",
+                "attackVector": "NETWORK",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "NONE",
+                "userInteraction": "REQUIRED",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "HIGH"
+              },
+              "exploitabilityScore": 2.8,
+              "impactScore": 5.9
+            }
+          ],
+          "ssvcV203": [
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "ssvcData": {
+                "timestamp": "2025-03-06T19:39:33.009371Z",
+                "id": "CVE-2023-0093",
+                "options": [
+                  {
+                    "exploitation": "none"
+                  },
+                  {
+                    "automatable": "no"
+                  },
+                  {
+                    "technicalImpact": "total"
+                  }
+                ],
+                "role": "CISA Coordinator",
+                "version": "2.0.3"
+              }
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "nvd@nist.gov",
+            "type": "Primary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-77"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:advanced_server_access:*:*:*:*:*:*:*:*",
+                    "versionStartIncluding": "1.13.1",
+                    "versionEndExcluding": "1.68.2",
+                    "matchCriteriaId": "8246431D-FAFE-428E-BBC0-8AEBDEE2F1D8"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://trust.okta.com/security-advisories/okta-advanced-server-access-client-cve-2023-0093/",
+            "source": "psirt@okta.com",
+            "tags": [
+              "Vendor Advisory"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2021-45094",
+        "sourceIdentifier": "cve@mitre.org",
+        "published": "2023-07-20T18:15:11.463",
+        "lastModified": "2026-06-17T04:13:09.723",
+        "vulnStatus": "Modified",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "Imprivata Privileged Access Management (formally Xton Privileged Access Management) 2.3.202112051108 allows XSS."
+          }
+        ],
+        "affected": [
+          {
+            "source": "cve@mitre.org",
+            "affectedData": [
+              {
+                "vendor": "n/a",
+                "product": "n/a",
+                "versions": [
+                  {
+                    "version": "n/a",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N",
+                "baseScore": 5.4,
+                "baseSeverity": "MEDIUM",
+                "attackVector": "NETWORK",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "LOW",
+                "userInteraction": "REQUIRED",
+                "scope": "CHANGED",
+                "confidentialityImpact": "LOW",
+                "integrityImpact": "LOW",
+                "availabilityImpact": "NONE"
+              },
+              "exploitabilityScore": 2.3,
+              "impactScore": 2.7
+            }
+          ],
+          "ssvcV203": [
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "ssvcData": {
+                "timestamp": "2024-10-24T16:50:34.527558Z",
+                "id": "CVE-2021-45094",
+                "options": [
+                  {
+                    "exploitation": "poc"
+                  },
+                  {
+                    "automatable": "no"
+                  },
+                  {
+                    "technicalImpact": "partial"
+                  }
+                ],
+                "role": "CISA Coordinator",
+                "version": "2.0.3"
+              }
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "nvd@nist.gov",
+            "type": "Primary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-79"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:imprivata_privileged_access_management:2.3.202112051108:*:*:*:*:*:*:*",
+                    "matchCriteriaId": "5FA76AA1-4C12-4915-9F13-8C91F941DFE7"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://aegis9.com.au/blog/",
+            "source": "cve@mitre.org",
+            "tags": [
+              "Third Party Advisory"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2023-0392",
+        "sourceIdentifier": "psirt@okta.com",
+        "published": "2023-11-08T21:15:08.353",
+        "lastModified": "2026-06-17T05:25:26.100",
+        "vulnStatus": "Modified",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "The LDAP Agent Update service with versions prior to 5.18 used an unquoted path, which could allow arbitrary code execution."
+          },
+          {
+            "lang": "es",
+            "value": "El servicio LDAP Agent Update con versiones anteriores a la 5.18 utilizaba una ruta sin comillas, lo que pod\u00eda permitir la ejecuci\u00f3n de c\u00f3digo arbitrario."
+          }
+        ],
+        "affected": [
+          {
+            "source": "psirt@okta.com",
+            "affectedData": [
+              {
+                "vendor": "Okta",
+                "product": "LDAP Agent",
+                "defaultStatus": "unaffected",
+                "versions": [
+                  {
+                    "version": "0",
+                    "lessThan": "5.18",
+                    "versionType": "semver",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:L/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
+                "baseScore": 6.7,
+                "baseSeverity": "MEDIUM",
+                "attackVector": "LOCAL",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "HIGH",
+                "userInteraction": "NONE",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "HIGH"
+              },
+              "exploitabilityScore": 0.8,
+              "impactScore": 5.9
+            },
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "type": "Secondary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:L/AC:H/PR:H/UI:N/S:U/C:L/I:L/A:L",
+                "baseScore": 3.9,
+                "baseSeverity": "LOW",
+                "attackVector": "LOCAL",
+                "attackComplexity": "HIGH",
+                "privilegesRequired": "HIGH",
+                "userInteraction": "NONE",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "LOW",
+                "integrityImpact": "LOW",
+                "availabilityImpact": "LOW"
+              },
+              "exploitabilityScore": 0.5,
+              "impactScore": 3.4
+            }
+          ],
+          "ssvcV203": [
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "ssvcData": {
+                "timestamp": "2024-09-04T16:02:43.869848Z",
+                "id": "CVE-2023-0392",
+                "options": [
+                  {
+                    "exploitation": "none"
+                  },
+                  {
+                    "automatable": "no"
+                  },
+                  {
+                    "technicalImpact": "partial"
+                  }
+                ],
+                "role": "CISA Coordinator",
+                "version": "2.0.3"
+              }
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "psirt@okta.com",
+            "type": "Secondary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-428"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:ldap_agent:*:*:*:*:*:*:*:*",
+                    "versionEndExcluding": "5.18",
+                    "matchCriteriaId": "46817F73-3816-44BE-9F93-37236FF534B6"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://trust.okta.com/security-advisories/okta-ldap-agent-cve-2023-0392",
+            "source": "psirt@okta.com",
+            "tags": [
+              "Vendor Advisory"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2024-7061",
+        "sourceIdentifier": "psirt@okta.com",
+        "published": "2024-08-07T17:15:52.113",
+        "lastModified": "2026-06-17T08:19:17.293",
+        "vulnStatus": "Analyzed",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "Okta Verify for Windows is vulnerable to privilege escalation through DLL hijacking. The vulnerability is fixed in Okta Verify for Windows version 5.0.2. To remediate this vulnerability, upgrade to 5.0.2 or greater."
+          },
+          {
+            "lang": "es",
+            "value": "Okta Verify para Windows es vulnerable a la escalada de privilegios mediante el secuestro de DLL. La vulnerabilidad se solucion\u00f3 en Okta Verify para Windows versi\u00f3n 5.0.2. Para corregir esta vulnerabilidad, actualice a 5.0.2 o superior."
+          }
+        ],
+        "affected": [
+          {
+            "source": "psirt@okta.com",
+            "affectedData": [
+              {
+                "vendor": "Okta",
+                "product": "Okta Verify for Windows",
+                "defaultStatus": "unaffected",
+                "versions": [
+                  {
+                    "version": "5.0.1",
+                    "lessThan": "5.0.1",
+                    "versionType": "semver",
+                    "status": "affected"
+                  },
+                  {
+                    "version": "5.0.2",
+                    "versionType": "semver",
+                    "status": "unaffected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "psirt@okta.com",
+              "type": "Secondary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N",
+                "baseScore": 5.5,
+                "baseSeverity": "MEDIUM",
+                "attackVector": "LOCAL",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "LOW",
+                "userInteraction": "NONE",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "NONE",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "NONE"
+              },
+              "exploitabilityScore": 1.8,
+              "impactScore": 3.6
+            },
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H",
+                "baseScore": 7.8,
+                "baseSeverity": "HIGH",
+                "attackVector": "LOCAL",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "LOW",
+                "userInteraction": "NONE",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "HIGH"
+              },
+              "exploitabilityScore": 1.8,
+              "impactScore": 5.9
+            }
+          ],
+          "ssvcV203": [
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "ssvcData": {
+                "timestamp": "2024-08-09T13:44:41.455152Z",
+                "id": "CVE-2024-7061",
+                "options": [
+                  {
+                    "exploitation": "none"
+                  },
+                  {
+                    "automatable": "no"
+                  },
+                  {
+                    "technicalImpact": "partial"
+                  }
+                ],
+                "role": "CISA Coordinator",
+                "version": "2.0.3"
+              }
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "psirt@okta.com",
+            "type": "Secondary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-22"
+              },
+              {
+                "lang": "en",
+                "value": "CWE-427"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:verify:*:*:*:*:*:windows:*:*",
+                    "versionEndExcluding": "5.0.2",
+                    "matchCriteriaId": "951E2564-0B8A-49B9-A130-4647DF323B7E"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://help.okta.com/oie/en-us/content/topics/releasenotes/oie-ov-release-notes.htm#panel4",
+            "source": "psirt@okta.com",
+            "tags": [
+              "Not Applicable",
+              "Release Notes"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2024-9191",
+        "sourceIdentifier": "psirt@okta.com",
+        "published": "2024-11-01T22:15:03.213",
+        "lastModified": "2026-06-17T08:24:06.740",
+        "vulnStatus": "Analyzed",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "The Okta Device Access features, provided by the Okta Verify agent for Windows, provides access to the OktaDeviceAccessPipe, which enables attackers in a compromised device to retrieve passwords associated with Desktop MFA passwordless logins. The vulnerability was discovered via routine penetration testing.\n\nNote: A precondition of this vulnerability is that the user must be using the Okta Device Access passwordless feature. Okta Device Access users not using passwordless are not affected, and customers only using Okta Verify on platforms other than Windows, or only using FastPass are not affected."
+          },
+          {
+            "lang": "es",
+            "value": "Las funciones de Okta Device Access, proporcionadas por el agente Okta Verify para Windows, brindan acceso a OktaDeviceAccessPipe, que permite a los atacantes en un dispositivo comprometido recuperar las contrase\u00f1as asociadas con los inicios de sesi\u00f3n sin contrase\u00f1a de Desktop MFA. La vulnerabilidad se descubri\u00f3 mediante pruebas de penetraci\u00f3n rutinarias. Nota: una condici\u00f3n previa de esta vulnerabilidad es que el usuario debe estar usando la funci\u00f3n sin contrase\u00f1a de Okta Device Access. Los usuarios de Okta Device Access que no usan la funci\u00f3n sin contrase\u00f1a no se ven afectados, y los clientes que solo usan Okta Verify en plataformas distintas de Windows o que solo usan FastPass no se ven afectados."
+          }
+        ],
+        "affected": [
+          {
+            "source": "psirt@okta.com",
+            "affectedData": [
+              {
+                "vendor": "Okta",
+                "product": "Okta Verify for Windows",
+                "defaultStatus": "unaffected",
+                "versions": [
+                  {
+                    "version": "5.0.2",
+                    "lessThan": "5.3.3",
+                    "versionType": "semver",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "psirt@okta.com",
+              "type": "Secondary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+                "baseScore": 7.1,
+                "baseSeverity": "HIGH",
+                "attackVector": "LOCAL",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "LOW",
+                "userInteraction": "NONE",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "NONE"
+              },
+              "exploitabilityScore": 1.8,
+              "impactScore": 5.2
+            },
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H",
+                "baseScore": 7.8,
+                "baseSeverity": "HIGH",
+                "attackVector": "LOCAL",
+                "attackComplexity": "LOW",
+                "privilegesRequired": "LOW",
+                "userInteraction": "NONE",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "HIGH"
+              },
+              "exploitabilityScore": 1.8,
+              "impactScore": 5.9
+            }
+          ],
+          "ssvcV203": [
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "ssvcData": {
+                "timestamp": "2024-11-05T15:22:10.829745Z",
+                "id": "CVE-2024-9191",
+                "options": [
+                  {
+                    "exploitation": "none"
+                  },
+                  {
+                    "automatable": "no"
+                  },
+                  {
+                    "technicalImpact": "total"
+                  }
+                ],
+                "role": "CISA Coordinator",
+                "version": "2.0.3"
+              }
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "psirt@okta.com",
+            "type": "Secondary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-276"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:verify:*:*:*:*:*:windows:*:*",
+                    "versionStartIncluding": "5.0.2",
+                    "versionEndExcluding": "5.3.3",
+                    "matchCriteriaId": "F74F5903-4967-4F07-A68B-6BF6B56F089D"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://help.okta.com/oie/en-us/content/topics/releasenotes/oie-ov-release-notes.htm#panel4",
+            "source": "psirt@okta.com",
+            "tags": [
+              "Release Notes"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2025-66033",
+        "sourceIdentifier": "security-advisories@github.com",
+        "published": "2025-12-10T22:16:27.520",
+        "lastModified": "2026-06-17T09:56:12.740",
+        "vulnStatus": "Analyzed",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "Okta Java Management SDK facilitates interactions with the Okta management API. In versions 21.0.0 through 24.0.0, specific multithreaded implementations may encounter memory issues as threads are not properly cleaned up after requests are completed. Over time, this can degrade performance and availability in long-running applications and may result in a denial-of-service condition under sustained load. In addition to using the affected versions, users may be at risk if they are implementing a long-running application using the ApiClient in a multi-threaded manner. This issue is fixed in version 24.0.1."
+          }
+        ],
+        "affected": [
+          {
+            "source": "security-advisories@github.com",
+            "affectedData": [
+              {
+                "vendor": "okta",
+                "product": "okta-sdk-java",
+                "versions": [
+                  {
+                    "version": ">= 21.0.0, < 24.0.1",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "security-advisories@github.com",
+              "type": "Secondary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:N/A:H",
+                "baseScore": 5.3,
+                "baseSeverity": "MEDIUM",
+                "attackVector": "NETWORK",
+                "attackComplexity": "HIGH",
+                "privilegesRequired": "LOW",
+                "userInteraction": "NONE",
+                "scope": "UNCHANGED",
+                "confidentialityImpact": "NONE",
+                "integrityImpact": "NONE",
+                "availabilityImpact": "HIGH"
+              },
+              "exploitabilityScore": 1.6,
+              "impactScore": 3.6
+            }
+          ],
+          "ssvcV203": [
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "ssvcData": {
+                "timestamp": "2025-12-11T15:40:05.587445Z",
+                "id": "CVE-2025-66033",
+                "options": [
+                  {
+                    "exploitation": "none"
+                  },
+                  {
+                    "automatable": "no"
+                  },
+                  {
+                    "technicalImpact": "partial"
+                  }
+                ],
+                "role": "CISA Coordinator",
+                "version": "2.0.3"
+              }
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "security-advisories@github.com",
+            "type": "Secondary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-401"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:java_management_sdk:*:*:*:*:*:*:*:*",
+                    "versionStartIncluding": "21.0.0",
+                    "versionEndExcluding": "24.0.1",
+                    "matchCriteriaId": "23BCEB28-B29D-4F50-9BC4-CB2B9A59FBCC"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://github.com/okta/okta-sdk-java/commit/1daa9229a70fc38fb252aeaa637f82d0b0729b3f",
+            "source": "security-advisories@github.com",
+            "tags": [
+              "Patch"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2025-67505",
+        "sourceIdentifier": "security-advisories@github.com",
+        "published": "2025-12-10T23:15:48.667",
+        "lastModified": "2026-06-17T09:57:45.267",
+        "vulnStatus": "Analyzed",
+        "cveTags": [],
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "Okta Java Management SDK facilitates interactions with the Okta management API. In versions 11.0.0 through 20.0.0, race conditions may arise from concurrent requests using the ApiClient class. This could cause a status code or response header from one request\u2019s response to influence another request\u2019s response. This issue is fixed in version 20.0.1."
+          }
+        ],
+        "affected": [
+          {
+            "source": "security-advisories@github.com",
+            "affectedData": [
+              {
+                "vendor": "okta",
+                "product": "okta-sdk-java",
+                "versions": [
+                  {
+                    "version": ">= 11.0.0, < 20.0.1",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "security-advisories@github.com",
+              "type": "Secondary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:H/A:L",
+                "baseScore": 8.4,
+                "baseSeverity": "HIGH",
+                "attackVector": "NETWORK",
+                "attackComplexity": "HIGH",
+                "privilegesRequired": "LOW",
+                "userInteraction": "NONE",
+                "scope": "CHANGED",
+                "confidentialityImpact": "HIGH",
+                "integrityImpact": "HIGH",
+                "availabilityImpact": "LOW"
+              },
+              "exploitabilityScore": 1.8,
+              "impactScore": 6.0
+            }
+          ],
+          "ssvcV203": [
+            {
+              "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+              "ssvcData": {
+                "timestamp": "2025-12-11T15:37:59.171457Z",
+                "id": "CVE-2025-67505",
+                "options": [
+                  {
+                    "exploitation": "none"
+                  },
+                  {
+                    "automatable": "no"
+                  },
+                  {
+                    "technicalImpact": "total"
+                  }
+                ],
+                "role": "CISA Coordinator",
+                "version": "2.0.3"
+              }
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "security-advisories@github.com",
+            "type": "Secondary",
+            "description": [
+              {
+                "lang": "en",
+                "value": "CWE-362"
+              }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:okta:java_management_sdk:*:*:*:*:*:*:*:*",
+                    "versionStartIncluding": "11.0.0",
+                    "versionEndExcluding": "20.0.1",
+                    "matchCriteriaId": "62438062-BAC8-4B6C-8940-244143824FA0"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://github.com/okta/okta-sdk-java/commit/abf4f128a0441f90cb7efcdcf4bde1aef8703243",
+            "source": "security-advisories@github.com",
+            "tags": [
+              "Patch"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
