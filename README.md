@@ -1,7 +1,7 @@
 # vrm — Vendor Risk Assessment Tool
 
 `vrm` assesses third-party vendors for risk analysts. An analyst queries by **company**
-+ **service**; the tool resolves that to machine identifiers, fans out to a fixed set of data
+and **service**; the tool resolves that to machine identifiers, fans out to a fixed set of data
 sources, and returns a **concise, sourced risk report**.
 
 The report is a **complete checklist**, not just the automatable subset. Categories the tool
