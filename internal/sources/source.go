@@ -16,7 +16,10 @@
 // converted into, a failure.
 package sources
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Query is the analyst's request: a company and the specific service being assessed.
 type Query struct {
@@ -66,6 +69,19 @@ const (
 type Citation struct {
 	Title string
 	URL   string
+}
+
+// ManualEntry is one analyst-supplied answer for a manual source (spec §7).
+//
+// Value is free text, recorded and rendered verbatim. The tool does not parse, validate, or
+// interpret it — interpretation is the analyst's job (spec §2.7).
+//
+// It lives here, with the other domain types, rather than in the store: persistence depends
+// on the domain and not the other way round, which is also what keeps the Phase 9 cache of
+// Sections from creating an import cycle.
+type ManualEntry struct {
+	Value      string
+	RecordedAt time.Time
 }
 
 // Section is one source's normalized contribution to the report.

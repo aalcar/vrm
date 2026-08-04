@@ -1,11 +1,19 @@
 // Package store owns the Postgres connection and the assessments cache schema.
 //
-// Phase 0 establishes the connection and applies migrations. Read/write cache logic
-// arrives in Phase 9; manual-entry writes in Phase 5.
+// Phase 0 establishes the connection and applies migrations. Phase 5 adds the manual-entry
+// read and write. The general read-through cache and TTL logic arrive in Phase 9.
+//
+// # Manual entries are analyst data, not cache
+//
+// They share assessments_cache for convenience — it is already keyed on
+// (company, service, source) — but they are governed by different rules (spec §7): they
+// never expire, --no-cache never clears them, and nothing overwrites them automatically.
+// The manual column marks them so TTL sweeps and cache invalidation can exclude them.
 package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/aalcar/vrm/internal/sources"
 	"github.com/aalcar/vrm/migrations"
 )
 
@@ -139,6 +148,61 @@ func (s *Store) apply(ctx context.Context, version, body string) (err error) {
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit migration %s: %w", version, err)
+	}
+	return nil
+}
+
+// manualPayload is the jsonb shape written to the section column. The recorded time lives
+// in fetched_at rather than here, so there is one authority for it.
+type manualPayload struct {
+	Value string `json:"value"`
+}
+
+// ManualEntry reads the analyst's recorded answer for one source. The boolean reports
+// whether an entry exists; absence is an ordinary outcome, not an error — it is how a
+// manual source knows to render its instruction instead of a value.
+func (s *Store) ManualEntry(ctx context.Context, company, service, source string) (sources.ManualEntry, bool, error) {
+	var (
+		raw     []byte
+		fetched time.Time
+	)
+	err := s.pool.QueryRow(ctx,
+		`SELECT section, fetched_at FROM assessments_cache
+		 WHERE company = $1 AND service = $2 AND source = $3 AND manual`,
+		NormalizeKey(company), NormalizeKey(service), source,
+	).Scan(&raw, &fetched)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return sources.ManualEntry{}, false, nil
+	}
+	if err != nil {
+		return sources.ManualEntry{}, false, fmt.Errorf("read manual entry for %s: %w", source, err)
+	}
+
+	var payload manualPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return sources.ManualEntry{}, false, fmt.Errorf("decode manual entry for %s: %w", source, err)
+	}
+	return sources.ManualEntry{Value: payload.Value, RecordedAt: fetched}, true, nil
+}
+
+// SetManual records an analyst's answer, replacing any previous one for the same
+// (company, service, source). Re-running vrm set is how an analyst corrects an entry, so
+// overwriting here is deliberate — what must never happen is an *automated* source
+// overwriting one, which is why every write path other than this one excludes manual rows.
+func (s *Store) SetManual(ctx context.Context, company, service, source, value string) error {
+	payload, err := json.Marshal(manualPayload{Value: value})
+	if err != nil {
+		return fmt.Errorf("encode manual entry for %s: %w", source, err)
+	}
+
+	_, err = s.pool.Exec(ctx,
+		`INSERT INTO assessments_cache (company, service, source, section, fetched_at, manual)
+		 VALUES ($1, $2, $3, $4, now(), true)
+		 ON CONFLICT (company, service, source)
+		 DO UPDATE SET section = EXCLUDED.section, fetched_at = now(), manual = true`,
+		NormalizeKey(company), NormalizeKey(service), source, payload)
+	if err != nil {
+		return fmt.Errorf("record manual entry for %s: %w", source, err)
 	}
 	return nil
 }
