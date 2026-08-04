@@ -376,6 +376,9 @@ func registerSources(cfg *config.Config, secrets *config.Secrets, st *store.Stor
 		// A public listing, read passively. No credential.
 		srcs = append(srcs, sources.NewFedRAMP())
 	}
+	if cfg.Sources[sources.SourceCAAG] {
+		srcs = append(srcs, sources.NewCAAG())
+	}
 	// Manual sources are not toggled by cfg.Sources: they are checklist categories that
 	// must appear in every report, answered or not, so that a category an analyst has yet
 	// to check never silently drops off the assessment (spec §3, §7).
@@ -416,6 +419,10 @@ func printSection(s sources.Section) {
 		}
 		if r, ok := s.Data.(sources.FedRAMPResult); ok {
 			printFedRAMP(r)
+			return
+		}
+		if r, ok := s.Data.(sources.CAAGResult); ok {
+			printCAAG(r)
 			return
 		}
 		if r, ok := s.Data.(sources.ManualResult); ok {
@@ -500,6 +507,33 @@ func printFedRAMP(r sources.FedRAMPResult) {
 			fmt.Printf("      matched via alias: %s (listed as %s)\n", o.MatchedAlias, o.Provider)
 		}
 		fmt.Printf("      %s\n", o.URL)
+	}
+}
+
+// printCAAG renders the California breach-notification section.
+//
+// Entries are listed as filed. No severity, no framing, no narrative — the analyst reads
+// the notification and decides what it means (spec §2.7).
+func printCAAG(r sources.CAAGResult) {
+	if len(r.Entries) == 0 {
+		// The qualifier matters: this list covers California only, so an empty result is
+		// "nothing reported in California", never "never breached".
+		fmt.Printf("    no California-reported breaches for %s\n", strings.Join(r.Searched, ", "))
+		return
+	}
+
+	for _, e := range r.Entries {
+		breached := "n/a"
+		if len(e.BreachDates) > 0 {
+			breached = strings.Join(e.BreachDates, ", ")
+		}
+		fmt.Printf("    %s — breached %s, reported %s\n", e.Organization, breached, e.ReportedDate)
+		// The filed name often differs from the vendor's; showing both lets an analyst
+		// confirm the row belongs to the company under assessment.
+		if !strings.EqualFold(e.Organization, e.SearchedAs) {
+			fmt.Printf("      found by searching: %s\n", e.SearchedAs)
+		}
+		fmt.Printf("      %s\n", e.ReportURL)
 	}
 }
 
