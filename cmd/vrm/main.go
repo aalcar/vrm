@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -44,6 +45,8 @@ func run() error {
 	switch cmd := os.Args[1]; cmd {
 	case "assess":
 		return runAssess(ctx, os.Args[2:])
+	case "set":
+		return runSet(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return nil
@@ -58,25 +61,38 @@ func usage() {
 
 Usage:
   vrm assess "<company>" --service "<service>"
+  vrm set    "<company>" --service "<service>" --source <name> --value "<text>"
 
-Flags:
+assess flags:
   --service string   service or product being assessed (required)
   --domain string    vendor domain, overriding entity resolution
   --cpe string       comma-separated CPEs for NVD, overriding entity resolution
+  --no-cache         re-query automated sources; analyst entries are never cleared
+  --config string    path to config file (default "config.yaml")
+
+set flags:
+  --service string   service or product being assessed (required)
+  --source string    manual source to record against (required)
+  --value string     the recorded answer, stored verbatim (required)
   --config string    path to config file (default "config.yaml")
 
 Secrets come from the environment; copy .env.example to .env to get started.
 `)
 }
 
-func runAssess(ctx context.Context, args []string) error {
-	// stdlib flag stops parsing at the first non-flag argument, so in the documented form
-	// `vrm assess "Okta" --service "SSO"` the company would swallow --service entirely.
-	// Pull a leading positional off first, then parse what remains.
-	var company string
+// splitCompany pulls a leading positional argument off the front.
+//
+// stdlib flag stops parsing at the first non-flag argument, so in the documented form
+// `vrm assess "Okta" --service "SSO"` the company would swallow --service entirely.
+func splitCompany(args []string) (company string, rest []string) {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		company, args = args[0], args[1:]
+		return args[0], args[1:]
 	}
+	return "", args
+}
+
+func runAssess(ctx context.Context, args []string) error {
+	company, args := splitCompany(args)
 
 	fset := flag.NewFlagSet("assess", flag.ContinueOnError)
 	service := fset.String("service", "", "service or product being assessed (required)")
@@ -87,6 +103,11 @@ func runAssess(ctx context.Context, args []string) error {
 	domain := fset.String("domain", "", "vendor domain, overriding entity resolution")
 	cpeFlag := fset.String("cpe", "",
 		"comma-separated CPEs to query NVD with, overriding entity resolution")
+	// Wired now, but automated-source caching is Phase 9, so today it has nothing to
+	// bypass. What it must never do — clear analyst-supplied manual entries — is already
+	// true and already tested, which is the point of adding the flag before the cache.
+	noCache := fset.Bool("no-cache", false,
+		"re-query automated sources; recorded manual entries are never cleared")
 	if err := fset.Parse(args); err != nil {
 		return err
 	}
@@ -150,7 +171,7 @@ func runAssess(ctx context.Context, args []string) error {
 		ent.CPEs = cpes
 	}
 
-	report := assess.New(registerSources(cfg, secrets), cfg.Timeouts.PerSource.Duration()).
+	report := assess.New(registerSources(cfg, secrets, st), cfg.Timeouts.PerSource.Duration()).
 		Run(ctx, q, ent)
 
 	fmt.Printf("query\n")
@@ -165,7 +186,11 @@ func runAssess(ctx context.Context, args []string) error {
 	fmt.Printf("  models:    resolution=%s research=%s\n",
 		cfg.Models.Resolution, cfg.Models.Research)
 	fmt.Printf("  automated: %s\n", strings.Join(cfg.EnabledSources(), ", "))
+	fmt.Printf("  manual:    %s\n", strings.Join(manualNames(cfg), ", "))
 	fmt.Printf("  optional credentials: NVD=%s\n", present(secrets.HasNVDKey()))
+	if *noCache {
+		fmt.Printf("  --no-cache: automated sources re-queried; manual entries untouched\n")
+	}
 
 	// Plain output on purpose — the real renderer is Phase 10.
 	fmt.Printf("\nsections\n")
@@ -254,7 +279,85 @@ func orNone(values []string) string {
 
 // registerSources builds the source list from config. A source toggled off in config.yaml
 // is not registered at all, so it produces no section rather than a skipped one.
-func registerSources(cfg *config.Config, secrets *config.Secrets) []sources.Source {
+// runSet records an analyst's answer for one manual source (spec §7).
+func runSet(ctx context.Context, args []string) error {
+	company, args := splitCompany(args)
+
+	fset := flag.NewFlagSet("set", flag.ContinueOnError)
+	service := fset.String("service", "", "service or product being assessed (required)")
+	source := fset.String("source", "", "manual source to record against (required)")
+	value := fset.String("value", "", "the recorded answer, stored verbatim (required)")
+	configPath := fset.String("config", "config.yaml", "path to config file")
+	if err := fset.Parse(args); err != nil {
+		return err
+	}
+	if company == "" && fset.NArg() > 0 {
+		company = fset.Arg(0)
+	}
+
+	if strings.TrimSpace(company) == "" {
+		return errors.New(`company name is required, e.g. vrm set "Okta" --service "SSO" --source ssllabs --value "A+"`)
+	}
+	if strings.TrimSpace(*service) == "" {
+		return errors.New("--service is required")
+	}
+	if strings.TrimSpace(*source) == "" {
+		return errors.New("--source is required")
+	}
+	// An empty value is almost certainly a shell quoting mistake, and recording one would
+	// look identical to an answered check.
+	if *value == "" {
+		return errors.New("--value is required")
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+
+	// Naming a source that does not exist would write a row nothing ever reads, so it fails
+	// here with the valid names rather than appearing to succeed.
+	if !slices.ContainsFunc(cfg.ManualSources, func(m config.ManualSource) bool {
+		return m.Name == *source
+	}) {
+		return fmt.Errorf("unknown manual source %q; configured manual sources are: %s",
+			*source, strings.Join(manualNames(cfg), ", "))
+	}
+
+	secrets, err := config.LoadSecrets()
+	if err != nil {
+		return err
+	}
+	st, err := store.New(ctx, secrets.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	if err := st.Migrate(ctx); err != nil {
+		return err
+	}
+
+	if err := st.SetManual(ctx, company, *service, *source, *value); err != nil {
+		return err
+	}
+
+	fmt.Printf("recorded %s for %s / %s\n",
+		*source, store.NormalizeKey(company), store.NormalizeKey(*service))
+	fmt.Printf("  %s\n", *value)
+	return nil
+}
+
+// manualNames lists the configured manual sources in config order.
+func manualNames(cfg *config.Config) []string {
+	names := make([]string, 0, len(cfg.ManualSources))
+	for _, m := range cfg.ManualSources {
+		names = append(names, m.Name)
+	}
+	return names
+}
+
+func registerSources(cfg *config.Config, secrets *config.Secrets, st *store.Store) []sources.Source {
 	var srcs []sources.Source
 	if cfg.Sources[sources.SourceBitSight] {
 		srcs = append(srcs, sources.NewBitSight(secrets.BitsightAPIKey))
@@ -268,6 +371,12 @@ func registerSources(cfg *config.Config, secrets *config.Secrets) []sources.Sour
 	if cfg.Sources[sources.SourceOSV] {
 		// OSV is free and unauthenticated.
 		srcs = append(srcs, sources.NewOSV())
+	}
+	// Manual sources are not toggled by cfg.Sources: they are checklist categories that
+	// must appear in every report, answered or not, so that a category an analyst has yet
+	// to check never silently drops off the assessment (spec §3, §7).
+	for _, m := range cfg.ManualSources {
+		srcs = append(srcs, sources.NewManual(m.Name, m.Instruction, m.URL, st))
 	}
 	return srcs
 }
@@ -299,6 +408,14 @@ func printSection(s sources.Section) {
 			printNVD(r)
 			// The per-CVE citations are one line each and would bury everything else;
 			// they are on the CVE lines already.
+			return
+		}
+		if r, ok := s.Data.(sources.ManualResult); ok {
+			// Analyst text, rendered exactly as recorded. Multi-line values are indented so
+			// continuations stay inside the section.
+			fmt.Printf("    %s\n", strings.ReplaceAll(r.Value, "\n", "\n    "))
+			fmt.Printf("    recorded: %s by an analyst (%s)\n",
+				r.RecordedAt.Format("2006-01-02"), r.URL)
 			return
 		}
 		for _, c := range s.Citations {

@@ -160,6 +160,45 @@ func TestManualEntryIgnoresNonManualRows(t *testing.T) {
 	}
 }
 
+func TestClearingCachedRowsLeavesManualEntriesIntact(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	company, service := uniqueQuery(t, st)
+
+	// --no-cache and the Phase 9 TTL sweep both mean "discard what was fetched", never
+	// "discard what the analyst recorded" (spec §7). Phase 9 owns the invalidation code, so
+	// what is pinned here is the guarantee it will be built on: the manual column separates
+	// the two populations, and a predicate that respects it cannot take analyst data with
+	// it. The spec calls this an easy bug to write; this is the tripwire for it.
+	if err := st.SetManual(ctx, company, service, "ssllabs", "A+"); err != nil {
+		t.Fatalf("SetManual: %v", err)
+	}
+	_, err := st.pool.Exec(ctx,
+		`INSERT INTO assessments_cache (company, service, source, section, manual)
+		 VALUES ($1, $2, $3, $4, false)`,
+		NormalizeKey(company), NormalizeKey(service), "bitsight", []byte(`{"value":"cached"}`))
+	if err != nil {
+		t.Fatalf("insert cache row: %v", err)
+	}
+
+	tag, err := st.pool.Exec(ctx,
+		`DELETE FROM assessments_cache WHERE company = $1 AND NOT manual`, NormalizeKey(company))
+	if err != nil {
+		t.Fatalf("clear cached rows: %v", err)
+	}
+	if n := tag.RowsAffected(); n != 1 {
+		t.Errorf("cleared %d rows, want 1 (the cached one)", n)
+	}
+
+	entry, found, err := st.ManualEntry(ctx, company, service, "ssllabs")
+	if err != nil || !found {
+		t.Fatalf("manual entry did not survive a cache clear: found %v, err %v", found, err)
+	}
+	if entry.Value != "A+" {
+		t.Errorf("Value = %q, want %q", entry.Value, "A+")
+	}
+}
+
 func TestManualEntryNormalizesTheKey(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
