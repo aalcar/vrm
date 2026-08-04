@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -106,6 +107,9 @@ var packageArraySchema = map[string]any{
 type Resolver struct {
 	client anthropic.Client
 	model  string
+	// apiKey is retained only so an error body echoing it can be redacted before the error
+	// reaches a rendered section. It is never logged and never sent anywhere but the client.
+	apiKey string
 }
 
 // ResolverOption configures a Resolver.
@@ -135,6 +139,7 @@ func NewResolver(apiKey, model string, opts ...ResolverOption) *Resolver {
 	return &Resolver{
 		client: anthropic.NewClient(reqOpts...),
 		model:  model,
+		apiKey: apiKey,
 	}
 }
 
@@ -173,7 +178,7 @@ func (r *Resolver) Resolve(ctx context.Context, q Query) (Resolution, error) {
 	if err != nil {
 		// The SDK's error carries status and response body, never the Authorization
 		// header. sanitizeAPIError strips any echo of the key from the body.
-		return Resolution{}, fmt.Errorf("resolve %q: %w", q.Company, sanitizeAPIError(err))
+		return Resolution{}, fmt.Errorf("resolve %q: %w", q.Company, sanitizeAPIError(err, r.apiKey))
 	}
 
 	// Safety classifiers can decline a request; content is empty or partial when they do.
@@ -404,15 +409,51 @@ func normalizeCPE(raw string) (string, bool) {
 	return c, true
 }
 
-// sanitizeAPIError removes any echo of the API key from an SDK error.
+// apiKeyPattern matches an Anthropic key. Keys are the one thing in an error body that must
+// never reach a rendered section.
+var apiKeyPattern = regexp.MustCompile(`sk-ant-[A-Za-z0-9_\-]+`)
+
+// sanitizeAPIError keeps an SDK error's explanation while removing any echo of the API key.
 //
 // The Authorization header is not included in SDK errors, but the response body is, and an
 // auth failure can quote the rejected credential back. Section errors are rendered to
 // analysts, so nothing credential-shaped may survive to that point.
-func sanitizeAPIError(err error) error {
+//
+// The API's own message is kept rather than discarded. A bare "HTTP 400" says only that
+// something is wrong with a request the analyst cannot see: the research schema exceeded the
+// structured-outputs grammar size limit during Phase 7, and the status code alone gave no
+// hint of it.
+//
+// Redaction works from the key itself, not from a pattern that guesses at its shape. A
+// pattern only removes credentials that look the way it expects, which is the wrong bet to
+// make with the thing that must never be rendered.
+func sanitizeAPIError(err error, apiKey string) error {
 	var apiErr *anthropic.Error
 	if !errors.As(err, &apiErr) {
 		return err
 	}
-	return fmt.Errorf("Anthropic API returned HTTP %d", apiErr.StatusCode)
+
+	var body struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if jsonErr := json.Unmarshal([]byte(apiErr.RawJSON()), &body); jsonErr != nil || body.Error.Message == "" {
+		return fmt.Errorf("Anthropic API returned HTTP %d", apiErr.StatusCode)
+	}
+
+	message := redactKey(body.Error.Message, apiKey)
+	return fmt.Errorf("Anthropic API returned HTTP %d (%s): %s",
+		apiErr.StatusCode, body.Error.Type, message)
+}
+
+// redactKey removes the credential from text bound for a rendered section.
+func redactKey(text, apiKey string) string {
+	if apiKey != "" {
+		text = strings.ReplaceAll(text, apiKey, "[redacted]")
+	}
+	// Belt and braces: a key other than the one configured — a stale value quoted back, or
+	// one from a proxy — is still a credential and still must not render.
+	return apiKeyPattern.ReplaceAllString(text, "[redacted]")
 }
