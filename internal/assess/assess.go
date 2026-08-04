@@ -52,12 +52,46 @@ type Report struct {
 type Assessor struct {
 	sources          []sources.Source
 	perSourceTimeout time.Duration
+	// sourceTimeouts overrides the shared deadline for named sources. One budget does not
+	// fit every source: a REST lookup that has not answered in 30s has failed, while the
+	// research call issues a dozen web searches and legitimately takes minutes. Without an
+	// override the shared timeout has to be raised to suit the slowest source, which stops
+	// it doing its job for all the others.
+	sourceTimeouts map[string]time.Duration
+}
+
+// Option configures an Assessor.
+type Option func(*Assessor)
+
+// WithSourceTimeout gives one source its own deadline.
+func WithSourceTimeout(name string, d time.Duration) Option {
+	return func(a *Assessor) {
+		if d <= 0 {
+			return
+		}
+		if a.sourceTimeouts == nil {
+			a.sourceTimeouts = make(map[string]time.Duration)
+		}
+		a.sourceTimeouts[name] = d
+	}
 }
 
 // New builds an Assessor. A non-positive timeout means no per-source deadline beyond
 // whatever the caller's context carries.
-func New(srcs []sources.Source, perSourceTimeout time.Duration) *Assessor {
-	return &Assessor{sources: srcs, perSourceTimeout: perSourceTimeout}
+func New(srcs []sources.Source, perSourceTimeout time.Duration, opts ...Option) *Assessor {
+	a := &Assessor{sources: srcs, perSourceTimeout: perSourceTimeout}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
+}
+
+// timeoutFor returns the deadline for one source.
+func (a *Assessor) timeoutFor(name string) time.Duration {
+	if d, ok := a.sourceTimeouts[name]; ok {
+		return d
+	}
+	return a.perSourceTimeout
 }
 
 // Run executes every source and aggregates their sections.
@@ -99,9 +133,9 @@ func (a *Assessor) runOne(
 	}()
 
 	srcCtx := ctx
-	if a.perSourceTimeout > 0 {
+	if timeout := a.timeoutFor(name); timeout > 0 {
 		var cancel context.CancelFunc
-		srcCtx, cancel = context.WithTimeout(ctx, a.perSourceTimeout)
+		srcCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 

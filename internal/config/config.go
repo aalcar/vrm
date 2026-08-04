@@ -24,11 +24,14 @@ import (
 // source is a spec change, not a config change.
 // cvedetails is deliberately absent: it is a manual source, not an automated one. See the
 // note in config.yaml.
-var knownSources = []string{"bitsight", "nvd", "osv", "fedramp", "caag"}
+var knownSources = []string{"bitsight", "nvd", "osv", "fedramp", "caag", "llm_research"}
 
-// nonSourceTTLs are cache_ttl keys that are not automated sources. Entity resolution and
-// the research call are cached too (spec §11), but they are not Source implementations.
-var nonSourceTTLs = []string{"llm_research", "resolution"}
+// nonSourceTTLs are cache_ttl keys that are not automated sources. Entity resolution is
+// cached too (spec §11) but runs before the fan-out, so it is not a Source.
+//
+// llm_research used to be listed here. It is a Source now — it runs inside the fan-out like
+// any other, which is what lets it fail or skip without taking the assessment with it.
+var nonSourceTTLs = []string{"resolution"}
 
 // Duration wraps time.Duration so YAML strings like "24h" parse correctly.
 //
@@ -70,6 +73,11 @@ type ManualSource struct {
 type Timeouts struct {
 	PerSource Duration `yaml:"per_source"`
 	Total     Duration `yaml:"total"`
+	// Research overrides PerSource for the checklist call, which issues a dozen web
+	// searches and takes minutes rather than seconds. Without its own budget, PerSource
+	// would have to be raised to suit it and would stop bounding every other source.
+	// Zero means fall back to PerSource.
+	Research Duration `yaml:"research"`
 }
 
 // NVD holds NVD-specific query tuning.

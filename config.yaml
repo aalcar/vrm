@@ -15,6 +15,9 @@ sources:
   osv: true
   fedramp: true
   caag: true
+  # The checklist research call. Billed per assessment and the most expensive thing here
+  # (a web search per question), so it is toggleable like any other source.
+  llm_research: true
 
 # Checklist categories an analyst fills in out of band (spec §7). These are the permanent
 # design for non-automatable categories, not stubs — do not write HTTP clients for them.
@@ -47,7 +50,10 @@ cache_ttl:
 
 timeouts:
   per_source: 30s
-  total: 90s # a ceiling, not a target; manual sources return instantly
+  # The research call runs a dozen server-side web searches; observed runs take 45-90s.
+  # It gets its own budget so per_source can stay tight for everything else.
+  research: 240s
+  total: 360s # a ceiling, not a target; manual sources return instantly
 
 nvd:
   results_per_cpe: 20

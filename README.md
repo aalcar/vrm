@@ -16,21 +16,23 @@ anything. [`CLAUDE.md`](CLAUDE.md) covers invariants and workflow.
 
 ## Status
 
-**Phases 0–4 complete**; Phase 5 (manual sources + `vrm set`) is next. See spec §13 for the
-full phased plan.
+**Phases 0–7 complete**; Phase 8 (concurrent fan-out) is next. See spec §13 for the full
+phased plan.
 
 `vrm assess` today resolves a company + service to machine identifiers via the Anthropic
-API, then queries BitSight, NVD and OSV concurrently and prints a sourced report. FedRAMP
-and CA AG (Phase 6), the manual checklist sources (Phase 5), LLM research (Phase 7),
-caching (Phase 9), and the web UI (Phase 11) are not built yet.
+API, then queries every source below and prints a sourced report. The fan-out is still
+sequential (Phase 8), caching is not wired (Phase 9), the renderer is deliberately plain
+(Phase 10), and there is no web UI yet (Phase 11).
 
 | Source | Keyed on | State |
 |---|---|---|
 | BitSight | domain | ✅ security rating, industry comparison |
 | NVD | CPE 2.3 | ✅ CVEs with CVSS scores + severity counts |
 | OSV | package + ecosystem | ✅ advisories for vendor-published OSS |
-| FedRAMP / CA AG | name | Phase 6 (scrapes) |
-| CVE Details / SSL Labs / Open Bug Bounty | — | Phase 5 (manual, by design) |
+| FedRAMP | company name | ✅ authorization status per offering (scrape) |
+| CA Attorney General | company name | ✅ California-reported breaches (scrape) |
+| LLM research | company + service | ✅ fixed checklist, every claim cited |
+| CVE Details / SSL Labs / Open Bug Bounty | — | ✅ manual, by design — `vrm set` |
 
 ## Setup
 
@@ -54,6 +56,13 @@ Non-secret settings — model, source toggles, cache TTLs, timeouts — live in 
 
 ```bash
 go run ./cmd/vrm assess "Okta" --service "SSO"
+```
+
+Categories that are not automatable appear as sections telling you what to check and where.
+Record an answer and it renders verbatim from then on:
+
+```bash
+go run ./cmd/vrm set "Okta" --service "SSO" --source ssllabs --value "A+"
 ```
 
 Entity resolution is the weakest link in the pipeline — a wrong CPE silently returns another
@@ -118,8 +127,16 @@ skipping OSV is correct behavior, not a gap.
 **"We found nothing" and "we couldn't look" are different claims.** They render identically
 if you're careless. NVD answers `200 / totalResults 0` both for a vendor with no CVEs and
 for a CPE that doesn't exist, so `vrm` confirms the CPE against NVD's dictionary before
-reporting a zero. Identifiers that fail validation are dropped *and named* — a silently
-discarded CPE looks exactly like a vendor that has none.
+reporting a zero. The FedRAMP scrape checks how many records it parsed before reporting a
+vendor as unlisted, and the CA AG scrape requires the page's own "no results" marker.
+Identifiers that fail validation are dropped *and named* — a silently discarded CPE looks
+exactly like a vendor that has none.
+
+**Nothing the model asserts is taken on trust.** Research answers are checked against the
+URLs the web-search tool actually returned; a citation that was never in those results is
+dropped as fabricated, and a claim left without one is dropped with it. An uncited "yes" on
+the two questions a model is most likely to confabulate — Kaspersky use and MOVEit
+exposure — is downgraded to `no_evidence_found` rather than shown.
 
 Deterministic data never passes through the LLM. Ratings, CVE records and registry statuses
 are interpolated verbatim; the model resolves entities and researches the checklist, and

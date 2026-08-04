@@ -171,7 +171,8 @@ func runAssess(ctx context.Context, args []string) error {
 		ent.CPEs = cpes
 	}
 
-	report := assess.New(registerSources(cfg, secrets, st), cfg.Timeouts.PerSource.Duration()).
+	report := assess.New(registerSources(cfg, secrets, st), cfg.Timeouts.PerSource.Duration(),
+		assess.WithSourceTimeout(sources.SourceResearch, cfg.Timeouts.Research.Duration())).
 		Run(ctx, q, ent)
 
 	fmt.Printf("query\n")
@@ -379,6 +380,11 @@ func registerSources(cfg *config.Config, secrets *config.Secrets, st *store.Stor
 	if cfg.Sources[sources.SourceCAAG] {
 		srcs = append(srcs, sources.NewCAAG())
 	}
+	if cfg.Sources[sources.SourceResearch] {
+		// The second LLM job, and the only one that runs inside the fan-out. It skips
+		// itself when the key is absent rather than failing the assessment.
+		srcs = append(srcs, sources.NewResearcher(secrets.AnthropicAPIKey, cfg.Models.Research))
+	}
 	// Manual sources are not toggled by cfg.Sources: they are checklist categories that
 	// must appear in every report, answered or not, so that a category an analyst has yet
 	// to check never silently drops off the assessment (spec §3, §7).
@@ -419,6 +425,10 @@ func printSection(s sources.Section) {
 		}
 		if r, ok := s.Data.(sources.FedRAMPResult); ok {
 			printFedRAMP(r)
+			return
+		}
+		if r, ok := s.Data.(sources.Research); ok {
+			printResearch(r)
 			return
 		}
 		if r, ok := s.Data.(sources.CAAGResult); ok {
@@ -507,6 +517,70 @@ func printFedRAMP(r sources.FedRAMPResult) {
 			fmt.Printf("      matched via alias: %s (listed as %s)\n", o.MatchedAlias, o.Provider)
 		}
 		fmt.Printf("      %s\n", o.URL)
+	}
+}
+
+// printResearch renders the checklist.
+//
+// Every claim is printed with the citation that supports it. Findings the parser dropped
+// are printed too: a silently missing answer is indistinguishable from a question nobody
+// asked, and the analyst is the one who decides whether a dropped claim is worth chasing.
+func printResearch(r sources.Research) {
+	fields := []struct {
+		label   string
+		finding sources.Finding
+	}{
+		{"supplier", r.SupplierDescription},
+		{"service", r.ServiceDescription},
+		{"deployment", r.ServiceImplementation},
+		{"supplier site", r.SupplierWebsite},
+		{"service site", r.ServiceWebsite},
+		{"security page", r.SecurityPage},
+		{"notifications", r.NotificationPage},
+	}
+	for _, f := range fields {
+		printFinding(f.label, f.finding)
+	}
+
+	for _, l := range r.Locations {
+		where := l.Country
+		if l.City != "" {
+			where = l.City + ", " + l.Country
+		}
+		printFinding(l.Kind, sources.Finding{Value: where, Citations: l.Citations})
+	}
+
+	for _, l := range r.CyberLawsuits {
+		// Outcome and resolution date are printed because they are the filter: they are how
+		// an analyst confirms the entry is a concluded case rather than an allegation.
+		printFinding("lawsuit", sources.Finding{
+			Value:     fmt.Sprintf("%s — %s (%s)", l.Value, l.Outcome, l.ResolutionDate),
+			Citations: l.Citations,
+		})
+	}
+	for _, b := range r.PastBreaches {
+		printFinding("breach", b)
+	}
+
+	// Tri-state answers are printed verbatim. "no_evidence_found" is not softened to "no":
+	// it is the weaker claim on purpose.
+	fmt.Printf("    %-14s %s\n", "kaspersky", r.UsedKaspersky)
+	printFinding("", r.UsedKasperskyEvidence)
+	fmt.Printf("    %-14s %s\n", "moveit", r.MOVEitImpacted)
+	printFinding("", r.MOVEitEvidence)
+
+	for _, d := range r.Dropped {
+		fmt.Printf("    dropped: %s\n", d)
+	}
+}
+
+func printFinding(label string, f sources.Finding) {
+	if f.Value == "" {
+		return
+	}
+	fmt.Printf("    %-14s %s\n", label, f.Value)
+	for _, c := range f.Citations {
+		fmt.Printf("      %s\n", c.URL)
 	}
 }
 

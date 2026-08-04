@@ -20,6 +20,7 @@ sources:
   osv: true
   fedramp: true
   caag: false
+  llm_research: true
 manual_sources:
   - name: cvedetails
     url: https://www.cvedetails.com
@@ -76,7 +77,7 @@ func TestLoadValid(t *testing.T) {
 
 	// caag is toggled off and must not appear.
 	got := strings.Join(cfg.EnabledSources(), ",")
-	if want := "bitsight,nvd,osv,fedramp"; got != want {
+	if want := "bitsight,nvd,osv,fedramp,llm_research"; got != want {
 		t.Errorf("EnabledSources() = %q, want %q", got, want)
 	}
 

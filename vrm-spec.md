@@ -447,6 +447,7 @@ sources:                  # toggle any automated source off wholesale
   osv: true
   fedramp: true
   caag: true
+  llm_research: true      # billed per assessment; the most expensive source here
 
 manual_sources:
   - name: cvedetails
@@ -463,7 +464,8 @@ cache_ttl: { ... }        # see §11
 
 timeouts:
   per_source: 30s
-  total: 90s              # ceiling, not a target; manual sources return instantly
+  research: 240s          # the checklist call runs a dozen web searches; 45-90s observed
+  total: 360s             # ceiling, not a target; manual sources return instantly
 
 nvd:
   results_per_cpe: 20
@@ -521,25 +523,38 @@ cleanly skipped.
 CVE Details was reclassified as a manual source during this phase (§7): the API is paywalled
 and its reference unreachable, so a client could be neither verified nor exercised.
 
-### Phase 5 — Manual sources + `vrm set`
+### Phase 5 — Manual sources + `vrm set` ✅
 `manual.go` implementing the generic `ManualSource`, constructed from `manual_sources`
 config. `vrm set` subcommand writing a manual row. Store marks manual rows TTL-exempt.
 **Done when:** with no entry, `cvedetails`, `ssllabs` and `openbugbounty` render as skipped
 sections showing their instruction and URL; after `vrm set`, the recorded value renders
 verbatim; `--no-cache` refreshes automated sources while leaving manual entries intact.
 
-### Phase 6 — FedRAMP + CA AG scrapes
+### Phase 6 — FedRAMP + CA AG scrapes ✅
 `fedramp.go` against the current `fedramp.gov/marketplace` host; `caag.go` against the CA
 AG breach list. Both with recorded fixtures in `testdata/`.
 **Done when:** a known FedRAMP-authorized vendor returns its status; a vendor on the CA AG
 list returns its entries; a changed page layout produces `StatusFailed` with a clear
 message, not silent empty results.
 
-### Phase 7 — LLM research checklist
+The FedRAMP marketplace had moved by the time this was built — see §6 and §15. Both scrapes
+distinguish a genuinely empty result from a broken parser: FedRAMP by checking the parsed
+record count against a floor, CA AG by requiring the `view-empty` marker that a no-match
+page renders in place of a table.
+
+### Phase 7 — LLM research checklist ✅
 Research function per §8: fixed fields, tri-state answers, citation enforcement, lawsuit
 double-filter, uncited-`yes` downgrade in the parser.
 **Done when:** every populated field has a working citation URL; an uncited Kaspersky or
 MOVEit `yes` is demonstrably downgraded to `no_evidence_found` by a unit test.
+
+Two API constraints shaped the result. The API's own citation blocks **do not survive
+structured output** — the JSON arrives in a text block with zero citations — so citations are
+model-authored schema fields, checked against the URLs the search tool actually returned.
+And the compiled structured-outputs grammar has a size limit this schema sits against: nested
+`{title, url}` citation objects exceeded it, so citations are plain URL strings and titles are
+taken from the search results; `state` shares the `city` field for the same reason. `enum`
+was dropped throughout, the parser being where those values have to be validated anyway.
 
 ### Phase 8 — Orchestrator fan-out
 All sources concurrently after resolution. Independent error collection, per-source and

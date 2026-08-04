@@ -15,7 +15,7 @@ criterion explicitly — not "looks good," but which criterion is satisfied by w
 **Do not run `git commit` or `git add`.** When a commit's worth of work is finished, say so
 and stop; the analyst reviews and commits. Suggesting a message is welcome.
 
-Phases 0–4 are complete. Phase 5 (manual sources + `vrm set`) is next.
+Phases 0–7 are complete. Phase 8 (concurrent fan-out) is next.
 
 ## Commands
 
@@ -50,6 +50,17 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   check and a dictionary check; a package ecosystem is checked against OSV's registry list.
   Anything that fails is dropped *and reported* — a silently discarded identifier looks
   exactly like a vendor that has none.
+- **Find the authoritative record before writing a scraper.** The FedRAMP listing carries
+  ~5,600 `{id,csp,cso,status,…}` literals that look exactly like the product catalogue.
+  They are `leveraged_systems` dependency lists and their status is stale — Okta reads
+  `Unknown` there while it is actually `FedRAMP Certified`. The real records are the ~674
+  `<var>.csp="…"` assignment runs. Parsing the obvious shape yields a full, plausible,
+  sourced section that is wrong, and nothing fails.
+- **Citations are checked against what search returned, never trusted.** The API's own
+  citation blocks do not survive structured output, so research citations are model-written
+  schema fields. Every one is matched against the URLs the web-search tool actually
+  returned, and an unmatched URL is dropped as fabricated. Do not relax this into host-level
+  or fuzzy matching.
 - **Never restate one scorer's vocabulary in another's.** GitHub says MODERATE, NVD says
   MEDIUM; they are different scales and translating is laundering. OSV gives a CVSS vector,
   not a score — do not derive the number.
@@ -83,6 +94,12 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   prompts. Secrets are env-only.
 - Do not guess API endpoint paths. If the exact path isn't in the spec or the vendor's
   docs, stop and ask.
+- Do not parse the nested `{id,csp,cso,status,…}` literals on the FedRAMP page. They are
+  dependency lists with stale statuses, not the catalogue. See the invariant above.
+- Do not add `minLength`, `maxLength`, `minimum`, `maximum`, `minItems` > 1, or `enum` to a
+  structured-outputs schema. The first five are unsupported; all of them inflate the
+  compiled grammar, and the research schema already sits against its size limit — one more
+  property on `locations` fails the request with HTTP 400.
 
 ## Conventions
 
@@ -106,4 +123,10 @@ is not. This is how CVE Details ended up in §7.
 
 Every source's fixtures are **real captured responses**, sanitized, not illustrative
 examples. Making the BitSight fixtures real in Phase 1 exposed two genuine bugs that
-hand-written ones had hidden.
+hand-written ones had hidden, and capturing the FedRAMP page in Phase 6 is the only reason
+the `leveraged_systems` trap was found rather than shipped.
+
+Adversarial fixtures — an uncited `yes`, a fabricated citation, a lawsuit with no
+resolution date — are the one exception, since no real response can be waited for to
+produce them. Build them as edits of a captured reply so the shape stays real, and label
+them as constructed.

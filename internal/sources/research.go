@@ -295,6 +295,29 @@ func NewResearcher(apiKey, model string, opts ...ResearcherOption) *Researcher {
 	return &Researcher{client: anthropic.NewClient(reqOpts...), model: model, apiKey: apiKey}
 }
 
+// Name identifies the source. A Researcher is a Source: unlike resolution, research does
+// not feed the other sources, so it runs inside the fan-out (spec §10 step 2).
+func (r *Researcher) Name() string { return SourceResearch }
+
+// Fetch runs the checklist and wraps it in a Section.
+func (r *Researcher) Fetch(ctx context.Context, q Query, ent ResolvedEntity) (Section, error) {
+	if r.apiKey == "" {
+		// Same shape as any other absent credential: a skip with a reason, not a failure.
+		return Skipped(SourceResearch,
+			"ANTHROPIC_API_KEY is not set; checklist research needs it"), nil
+	}
+
+	research, err := r.Research(ctx, q, ent)
+	if err != nil {
+		return Failed(SourceResearch, err), err
+	}
+
+	// The section's citations are the findings' own; they are rendered inline with each
+	// answer rather than collected into one undifferentiated list, because a citation only
+	// means anything attached to the claim it supports.
+	return OK(SourceResearch, research), nil
+}
+
 // Research answers the checklist for one vendor.
 func (r *Researcher) Research(ctx context.Context, q Query, ent ResolvedEntity) (Research, error) {
 	if strings.TrimSpace(q.Company) == "" {
