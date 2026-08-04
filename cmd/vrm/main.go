@@ -372,6 +372,10 @@ func registerSources(cfg *config.Config, secrets *config.Secrets, st *store.Stor
 		// OSV is free and unauthenticated.
 		srcs = append(srcs, sources.NewOSV())
 	}
+	if cfg.Sources[sources.SourceFedRAMP] {
+		// A public listing, read passively. No credential.
+		srcs = append(srcs, sources.NewFedRAMP())
+	}
 	// Manual sources are not toggled by cfg.Sources: they are checklist categories that
 	// must appear in every report, answered or not, so that a category an analyst has yet
 	// to check never silently drops off the assessment (spec §3, §7).
@@ -408,6 +412,10 @@ func printSection(s sources.Section) {
 			printNVD(r)
 			// The per-CVE citations are one line each and would bury everything else;
 			// they are on the CVE lines already.
+			return
+		}
+		if r, ok := s.Data.(sources.FedRAMPResult); ok {
+			printFedRAMP(r)
 			return
 		}
 		if r, ok := s.Data.(sources.ManualResult); ok {
@@ -460,6 +468,38 @@ func printNVD(r sources.NVDResult) {
 			// A CNA's score is not NVD's own analysis; never let them look alike.
 			fmt.Printf("      scored by: %s\n", v.ScoreSource)
 		}
+	}
+}
+
+// printFedRAMP renders the authorization section.
+//
+// Statuses and impact levels keep FedRAMP's own vocabulary: "FedRAMP Certified" is not
+// restated as "authorized", and LI-SaaS is not folded into Low.
+func printFedRAMP(r sources.FedRAMPResult) {
+	if len(r.Offerings) == 0 {
+		// Saying how many records were searched is what separates "not on the marketplace"
+		// from "we could not read the marketplace".
+		fmt.Printf("    no listing for %s (searched %d marketplace records)\n",
+			strings.Join(r.Searched, ", "), r.TotalRecords)
+		return
+	}
+
+	for _, o := range r.Offerings {
+		fmt.Printf("    %s — %s\n", o.Offering, o.Status)
+		fmt.Printf("      impact: %s", o.ImpactLevel)
+		if o.AuthType != "" {
+			fmt.Printf("  authorization: %s", o.AuthType)
+		}
+		if o.AuthCategory != "" {
+			fmt.Printf(" (%s)", o.AuthCategory)
+		}
+		fmt.Println()
+		if o.MatchedAlias != "" {
+			// Surfaced so a wrong company is caught before its authorization is credited
+			// to the vendor actually being assessed.
+			fmt.Printf("      matched via alias: %s (listed as %s)\n", o.MatchedAlias, o.Provider)
+		}
+		fmt.Printf("      %s\n", o.URL)
 	}
 }
 

@@ -166,7 +166,7 @@ All automated sources implement `Source` and run concurrently after entity resol
 | **BitSight** | domain | Licensed API key | Pull exact endpoints from BitSight's own API docs. Do not guess paths. A domain search is fuzzy and returns unrelated customer subdomains — prefer an exact `primary_domain` match and surface the alternatives. |
 | **NVD (NIST)** | CPE 2.3 | Free CVE API 2.0; `NVD_API_KEY` optional | Query with **`virtualMatchString`, not `cpeName`** — `cpeName` requires a concrete version and 404s on the version-agnostic CPEs resolution produces. 5 req/30s without a key, 50 with. Paginate. **Zero results is ambiguous** and must be disambiguated against the CPE dictionary — see §15. |
 | **OSV** | package + ecosystem | Free API (`api.osv.dev`) | Keyed on **open-source packages, not companies.** Only meaningful if the vendor publishes OSS packages; otherwise `StatusSkipped`. Do not force a vendor→package mapping. **Ecosystem is mandatory** — a name-only query is rejected with HTTP 400. Severity is a CVSS *vector*, not a score. |
-| **FedRAMP Marketplace** | product / company name | **No official public API** — scrape | The marketplace moved to `fedramp.gov/marketplace` (the old `marketplace.fedramp.gov` host is deprecated and redirects). Target the current host. |
+| **FedRAMP Marketplace** | product / company name | **No official public API** — scrape | Read `www.fedramp.gov/marketplace/products/`. `marketplace.fedramp.gov` is now a SvelteKit shell that only redirects there, and its former `/api/v1/providers` JSON API returns **404**. The listing is ~4.7 MB of server-rendered HTML carrying the whole catalogue (674 offerings when built), so it is fetched whole and filtered locally. **Parse the per-record variable assignments, not the nested `{id,csp,cso,status,…}` literals** — those are `leveraged_systems` dependency lists whose status is stale. See §15. |
 | **CA Attorney General** | company name | No API — scrape the public breach-notification list | Authoritative for breaches reported in California. Structured and reliable; a deterministic complement to LLM breach research. |
 
 **Scrape fragility.** `fedramp.go` and `caag.go` parse HTML that will change without
@@ -607,6 +607,16 @@ partials as they land, then the full report.
   CPE dictionary. Both live Okta runs during Phase 3 resolved to a fabricated CPE
   (`okta:okta`, then `okta:single_sign-on`; NVD's real products are `access_gateway`,
   `verify`, …), which would otherwise have rendered as a clean bill of health.
+- **When scraping, find the authoritative record before writing the parser.** The FedRAMP
+  listing is the live example, and it is a trap that hides in plain sight. The page carries
+  ~5,600 tidy `{id:"…",csp:"…",cso:"…",status:"…"}` object literals, which look exactly like
+  the product catalogue — they are `leveraged_systems` dependency lists nested inside other
+  records, and their `status` is not maintained. Okta appears in them as `"Unknown"` while
+  its actual marketplace status is `"FedRAMP Certified"`. The authoritative records are the
+  674 runs of `<var>.csp="…"` assignments. A parser built on the obvious shape returns a
+  complete, plausible, sourced section that is wrong, and nothing fails — the same class of
+  error as a wrong CPE. Count what you parsed and check it against what the page should
+  carry.
 - **Manual sources are not stubs to be "finished later."** They are the permanent design
   for categories that should not be automated. Do not write HTTP clients for them.
 - **Manual entries are analyst data, not cache.** They share a table for convenience only.
