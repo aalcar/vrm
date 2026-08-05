@@ -50,13 +50,12 @@ cache_ttl:
 
 timeouts:
   per_source: 30s
-  # The research call runs a dozen server-side web searches. Measured at ~48s when it was
-  # built and ~342s a week later, for the same query — the work is bounded by
-  # researchMaxSearches, not by the clock, so the wall time moves with how much searching
-  # the model decides to do. Budgeted well above the slow end; lower researchMaxSearches
-  # instead if you would rather trade thoroughness for a faster assessment.
-  research: 480s
-  total: 600s # a ceiling, not a target; manual sources return instantly
+  # The research call. Was 33-342s before the brevity rule and an explicit effort setting;
+  # 22-46s across fifteen runs since. Budgeted at roughly five times the slowest of those,
+  # because the old distribution had a long tail and one round of measurements is not proof
+  # the tail is gone.
+  research: 240s
+  total: 360s # a ceiling, not a target; manual sources return instantly
 
 nvd:
   results_per_cpe: 20

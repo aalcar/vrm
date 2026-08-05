@@ -169,6 +169,14 @@ All automated sources implement `Source` and run concurrently after entity resol
 | **FedRAMP Marketplace** | product / company name | **No official public API** — scrape | Read `www.fedramp.gov/marketplace/products/`. `marketplace.fedramp.gov` is now a SvelteKit shell that only redirects there, and its former `/api/v1/providers` JSON API returns **404**. The listing is ~4.7 MB of server-rendered HTML carrying the whole catalogue (674 offerings when built), so it is fetched whole and filtered locally. **Parse the per-record variable assignments, not the nested `{id,csp,cso,status,…}` literals** — those are `leveraged_systems` dependency lists whose status is stale. See §15. |
 | **CA Attorney General** | company name | No API — scrape the public breach-notification list | `oag.ca.gov/privacy/databreach/list`, filtered by `field_sb24_org_name_value`. A Drupal view with stable per-column classes. Authoritative for breaches **reported in California** — an empty result is never "never breached". The filter is a **substring** match, so record each row's organization name as filed rather than assuming it is the vendor. **A no-match page renders no `<table>` at all**, only a `view-empty` div; that div is the only thing distinguishing a clean vendor from a broken parser. |
 
+> **FedRAMP is broken upstream as of 2026-08-05.** `www.fedramp.gov/marketplace/products/`
+> now serves a 39 KB client-rendered SvelteKit shell with no catalogue in the HTML — the
+> 4.7 MB server-rendered listing this parser was built against a day earlier is gone, and no
+> replacement data source has been identified yet. The source fails loudly (`StatusFailed`,
+> "the listing page layout has changed") rather than reporting every vendor as unlisted,
+> which is the behaviour the record floor exists for. Finding the new data location is
+> outstanding work; do not soften the floor to make the section green again.
+
 **Scrape fragility.** `fedramp.go` and `caag.go` parse HTML that will change without
 notice. Each must: isolate its parsing in one function, ship with a recorded HTML fixture
 in `testdata/`, and fail to `StatusFailed` with a clear message rather than returning
@@ -297,14 +305,27 @@ type Research struct {
   company is a security vendor. Each entry must state its outcome and resolution date;
   without both, **drop the entry** — the resolution date is how "concluded" is verified,
   and is retained for that reason alone.
+- **Citations are checked against what search returned, and are fabricated often enough to
+  matter.** Across twelve live runs, four citations were discarded as invented in two of
+  them; at `effort: low` it reached two runs in three. The guard is not a formality.
 - **Kaspersky and MOVEit are the highest confabulation risk in the whole tool.** Both are
   famous events an LLM will pattern-match toward. A `yes` requires a citation naming this
   specific vendor. An uncited `yes` is **downgraded to `no_evidence_found` by the parser**,
   not passed through. Never emit a bare `no`.
 - **Locations must be labeled** as HQ vs. operational/employee presence, and must state
   country (plus city and state when US). Do not merge them into one blob.
-- **Every non-empty `Finding.Value` requires at least one citation.** A finding with a
-  claim and no citation is dropped and the field is marked `no_evidence_found`.
+- **Every non-empty `Finding.Value` requires at least one citation, and at most two are
+  shown.** A finding with a claim and no citation is dropped and the field is marked
+  `no_evidence_found`. Two rather than one because a citation is only useful if it resolves:
+  of 28 URLs checked by hand, four were bot-blocked to a plain HTTP client, and a single
+  source per claim leaves nothing to fall back on. The parser can verify a citation came
+  from search, never that it still loads.
+- **Values are one or two sentences.** The limit is per entry, not per field: where a field
+  is a list, every location, breach and lawsuit found is still reported. Stating it the
+  looser way cost a run all of its locations.
+- **An empty checklist is a failed lookup, not a clean vendor.** If no question could be
+  answered the section is `StatusFailed` carrying the drop reasons. A blank checklist under
+  a green heading reads as "nothing to find", which is the stronger claim and the wrong one.
 - **No editorializing.** Findings state what a source says and link to it. No severity
   ratings, risk framing, or narrative connective tissue — the analyst writes that (§2.7).
 - **Deterministic sources take precedence.** The CA AG scrape is authoritative for
@@ -464,8 +485,8 @@ cache_ttl: { ... }        # see §11
 
 timeouts:
   per_source: 30s
-  research: 480s          # the checklist call runs a dozen web searches; 48-342s observed
-  total: 600s             # ceiling, not a target; manual sources return instantly
+  research: 240s          # the checklist call; 22-46s observed since the brevity rule
+  total: 360s             # ceiling, not a target; manual sources return instantly
 
 nvd:
   results_per_cpe: 20
@@ -639,6 +660,14 @@ partials as they land, then the full report.
   complete, plausible, sourced section that is wrong, and nothing fails — the same class of
   error as a wrong CPE. Count what you parsed and check it against what the page should
   carry.
+- **Measure before tuning, and measure more than once.** Research latency was attributed to
+  the web-search budget on a single pair of runs; three runs per setting showed the budget
+  correlates at only r=0.51, and the same budget produced 44s and 323s on near-identical
+  work. The real cause was generation time — a brevity rule and an explicit `effort` setting
+  took the median from 116s to 30s, which no amount of search tuning would have found.
+  `effort` is worth setting explicitly on both LLM calls: the default was slower *and*
+  answered fewer fields, and `medium` returned an empty checklist in two runs of five where
+  `low` never did in eighteen.
 - **Manual sources are not stubs to be "finished later."** They are the permanent design
   for categories that should not be automated. Do not write HTTP clients for them.
 - **Manual entries are analyst data, not cache.** They share a table for convenience only.

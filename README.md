@@ -31,7 +31,7 @@ sequential (Phase 8), caching is not wired (Phase 9), the renderer is deliberate
 | OSV | package + ecosystem | ✅ advisories for vendor-published OSS |
 | FedRAMP | company name | ✅ authorization status per offering (scrape) |
 | CA Attorney General | company name | ✅ California-reported breaches (scrape) |
-| LLM research | company + service | ✅ fixed checklist, every claim cited |
+| LLM research | company + service | ✅ fixed checklist, every claim cited (max 2 sources each) |
 | CVE Details / SSL Labs / Open Bug Bounty | — | ✅ manual, by design — `vrm set` |
 
 ## Setup
@@ -134,9 +134,11 @@ exactly like a vendor that has none.
 
 **Nothing the model asserts is taken on trust.** Research answers are checked against the
 URLs the web-search tool actually returned; a citation that was never in those results is
-dropped as fabricated, and a claim left without one is dropped with it. An uncited "yes" on
+dropped as fabricated, and a claim left without one is dropped with it. That guard is not a
+formality — invented citations turn up in a meaningful fraction of runs. An uncited "yes" on
 the two questions a model is most likely to confabulate — Kaspersky use and MOVEit
-exposure — is downgraded to `no_evidence_found` rather than shown.
+exposure — is downgraded to `no_evidence_found` rather than shown, and a checklist where
+nothing could be answered is reported as a failed lookup rather than a clean vendor.
 
 Deterministic data never passes through the LLM. Ratings, CVE records and registry statuses
 are interpolated verbatim; the model resolves entities and researches the checklist, and

@@ -17,6 +17,11 @@ and stop; the analyst reviews and commits. Suggesting a message is welcome.
 
 Phases 0–8 are complete. Phase 9 (caching) is next.
 
+**FedRAMP is broken upstream (2026-08-05).** The marketplace listing went client-rendered
+and the catalogue is no longer in the HTML, so `fedramp` fails loudly on every run. That is
+the record floor working as intended. Finding the new data location is a task in its own
+right — do not lower the floor to turn the section green.
+
 ## Commands
 
 ```bash
@@ -28,6 +33,10 @@ gofmt -l .              # lists unformatted files; -w to fix
 
 `go test -race ./...` is the default test command for this project. A test run without
 `-race` proves very little here.
+
+**Anything about LLM latency or output quality needs three runs per setting, not one.** The
+same configuration has produced 33s and 278s on identical work. Single-run comparisons in
+this project have twice pointed at the wrong cause.
 
 ## Invariants
 
@@ -64,6 +73,13 @@ These come from the spec's guiding principles. Violating one is a bug even if te
 - **Never restate one scorer's vocabulary in another's.** GitHub says MODERATE, NVD says
   MEDIUM; they are different scales and translating is laundering. OSV gives a CVSS vector,
   not a score — do not derive the number.
+- **An empty result from a source that ran is a failure, not a clean answer.** Research
+  returning nothing is `StatusFailed`, the same way an unverified NVD zero and a FedRAMP
+  parse below its floor are. A blank section under a green heading is the strongest claim
+  the tool can make and the one it can least support.
+- **Set `effort` explicitly on both LLM calls.** The default is slower and answers fewer
+  fields; `medium` returned an empty checklist twice in five runs where `low` never did in
+  eighteen. Never leave it to an API default nobody chose.
 - **Uncited claims are dropped, not displayed.** A `yes` without a citation naming this
   specific vendor is downgraded to `no_evidence_found` by the parser.
 - **Partial failure is normal.** One source failing marks that section only. Never cancel
