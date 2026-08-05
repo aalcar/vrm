@@ -164,8 +164,11 @@ Answer only the fields in the schema. Do not add commentary, severity ratings, r
 or narrative — the analyst writes those. Record what a source says and cite it.
 
 LENGTH
-Keep every value to one or two sentences. Record what the source says; do not explain,
+Keep each value to one or two sentences. Record what the source says; do not explain,
 qualify, or add background.
+
+This limits how long each entry is, NOT how many entries to give. Where a field is a list —
+locations, past breaches, lawsuits — still report every one you found, each written briefly.
 
 CITATIONS
 Every non-empty value needs at least one citation, and each citation must be a URL that
@@ -197,7 +200,7 @@ vendor. Each entry must state its outcome and its resolution date. Omit any entr
 cannot supply both.
 
 LOCATIONS
-Label each location as "headquarters" or "operational". Give the country. For US locations
+List every office or site you find, one entry each. Label each as "headquarters" or "operational". Give the country. For US locations
 put the city and state together in the city field, as "San Francisco, California". List each
 location as its own entry; do not merge several into one.
 
@@ -362,11 +365,14 @@ func (r *Researcher) Fetch(ctx context.Context, q Query, ent ResolvedEntity) (Se
 	// with every field empty and no citations, which without this floor would have rendered
 	// as "llm_research ok" above a blank checklist.
 	if answered := research.Answered(); answered == 0 {
+		// The reasons travel with the error. A failed Section carries no Data by design, so
+		// without them the one thing an analyst needs to know — whether the vendor is
+		// genuinely absent from the web or the run went wrong — is exactly what is missing.
 		err := fmt.Errorf(
 			"the checklist came back empty (%d web search results, %d findings dropped): "+
 				"no field could be answered, so this is a failed lookup rather than a vendor "+
-				"with nothing on record",
-			len(research.SearchResults), len(research.Dropped))
+				"with nothing on record%s",
+			len(research.SearchResults), len(research.Dropped), formatDropped(research.Dropped))
 		return Failed(SourceResearch, err), err
 	}
 
@@ -387,6 +393,11 @@ func (r *Researcher) Research(ctx context.Context, q Query, ent ResolvedEntity) 
 		MaxTokens: researchMaxTokens,
 		System:    []anthropic.TextBlockParam{{Text: researchPrompt}},
 		OutputConfig: anthropic.OutputConfigParam{
+			// Set explicitly, as resolution does. Leaving it to the default was measurably
+			// worse on both axes: 224s with 5 of 7 fields answered and no lawsuits found,
+			// against 90s and a full checklist at low. Twelve probe runs at low produced no
+			// empty checklists; the default produced two in eight.
+			Effort: anthropic.OutputConfigEffortLow,
 			Format: anthropic.JSONOutputFormatParam{Schema: researchSchema},
 		},
 		// The server-side web search tool: the model issues the searches and the results
@@ -516,4 +527,23 @@ func unmarshalResearch(raw string) (researchReply, error) {
 		return researchReply{}, fmt.Errorf("decode research reply: %w", err)
 	}
 	return reply, nil
+}
+
+// formatDropped renders why findings were discarded, for an error an analyst will read.
+//
+// Capped, because the whole checklist failing means every field has its own reason and the
+// list would bury the sentence above it. The count is already reported alongside.
+func formatDropped(dropped []string) string {
+	if len(dropped) == 0 {
+		return ""
+	}
+	const show = 3
+
+	shown := dropped
+	suffix := ""
+	if len(shown) > show {
+		shown = shown[:show]
+		suffix = fmt.Sprintf("\n  ... and %d more", len(dropped)-show)
+	}
+	return "\n  " + strings.Join(shown, "\n  ") + suffix
 }
