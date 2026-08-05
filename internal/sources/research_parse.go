@@ -121,6 +121,13 @@ func (v *researchValidator) citations(urls []string, label string) []Citation {
 		}
 		seen[key] = true
 		kept = append(kept, result)
+
+		// Enforced here rather than left to the prompt. A prompt limit is a request; this
+		// is the only place it binds — the same reason CPEs are checked against NVD's
+		// dictionary instead of asked for more firmly.
+		if len(kept) == researchMaxCitations {
+			break
+		}
 	}
 	return kept
 }

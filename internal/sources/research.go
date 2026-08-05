@@ -31,7 +31,28 @@ const researchMaxTokens = 16384
 
 // researchMaxSearches bounds the server-side web searches per assessment. Each is billed,
 // and the checklist is a fixed list of questions rather than an open investigation.
-const researchMaxSearches = 12
+//
+// Lowered from 12 to 5 on cost, not speed. Twelve runs across four budgets showed quality
+// holding at 5 — all seven fields answered in two of three runs, locations 5-7, and both
+// content checks passing — while 3 collapsed locations to one entry in two of three runs.
+//
+// It is not a latency fix. Latency correlates with the budget at only r=0.51 over those
+// runs, and the same budget produced 44s and 323s on identical work. Caching (Phase 9,
+// llm_research TTL 168h) is what makes the slow tail stop mattering.
+const researchMaxSearches = 5
+
+// researchMaxCitations caps how many sources one finding shows.
+//
+// The model averages roughly 1.6 citations per finding and pays no attention to how many
+// the report can absorb; across those same twelve runs the total sat at 19-25 regardless of
+// every other setting, so nothing but an explicit cap moves it.
+//
+// Two rather than one because a citation is only useful if it resolves. Of 28 citation URLs
+// checked by hand, four were bot-blocked to a plain HTTP client — with a single source per
+// claim, one unreachable link leaves the analyst an unverifiable finding on a tool whose
+// entire premise is clicking through to check. The parser verifies a citation came from
+// search; it cannot verify it still loads.
+const researchMaxCitations = 2
 
 // Tri is a three-valued answer.
 //
@@ -142,10 +163,15 @@ const researchPrompt = `You answer a fixed checklist about a vendor for a securi
 Answer only the fields in the schema. Do not add commentary, severity ratings, risk framing,
 or narrative — the analyst writes those. Record what a source says and cite it.
 
+LENGTH
+Keep every value to one or two sentences. Record what the source says; do not explain,
+qualify, or add background.
+
 CITATIONS
 Every non-empty value needs at least one citation, and each citation must be a URL that
-appeared in your web search results. Do not cite a URL you did not see in those results, and
-do not reconstruct or guess a URL. A claim whose citation is not in the search results is
+appeared in your web search results. Give at most two per value, most authoritative first —
+further ones are discarded. Do not cite a URL you did not see in those results, and do not
+reconstruct or guess a URL. A claim whose citation is not in the search results is
 discarded, so an uncited answer is worse than no answer.
 
 If you cannot find evidence for a field, leave its value empty. An empty field is a correct

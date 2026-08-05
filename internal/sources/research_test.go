@@ -470,3 +470,60 @@ func TestAnsweredIgnoresTriStateFields(t *testing.T) {
 		t.Errorf("Answered() = %d for a checklist with only tri-state answers, want 0", n)
 	}
 }
+
+func TestCitationsAreCappedPerFinding(t *testing.T) {
+	// The model pays no attention to how many sources a report can absorb — across twelve
+	// live runs the total sat at 19-25 regardless of every other setting. Only an explicit
+	// cap moves it, and only the parser can enforce one.
+	raw := reply(map[string]any{
+		"supplier_description": map[string]any{
+			"value": "An identity provider.",
+			"citations": []string{
+				"https://security.okta.com/",
+				"https://trust.okta.com/",
+				"https://security.okta.com/#overview", // same page, different fragment
+			},
+		},
+	})
+	results := append(realResults, Citation{Title: "Third", URL: "https://example.com/a"})
+
+	research, err := parseResearch(raw, results)
+	if err != nil {
+		t.Fatalf("parseResearch: %v", err)
+	}
+	if got := len(research.SupplierDescription.Citations); got != researchMaxCitations {
+		t.Errorf("kept %d citations, want the cap of %d", got, researchMaxCitations)
+	}
+	// Trimming for display is not the same as discarding a fabrication, so it is not
+	// recorded as a drop — that would make a tidy report look like a suspicious one.
+	if containsSubstring(research.Dropped, "not in the web search results") {
+		t.Errorf("a valid citation was recorded as fabricated: %v", research.Dropped)
+	}
+}
+
+func TestFabricatedCitationsAreStillCaughtBeforeTheCap(t *testing.T) {
+	// The cap must not become a way for an invented URL to slip past unexamined: the first
+	// citation here is fabricated, so it has to be reported even though two valid ones
+	// follow and would fill the quota on their own.
+	raw := reply(map[string]any{
+		"supplier_description": map[string]any{
+			"value": "An identity provider.",
+			"citations": []string{
+				"https://www.okta.com/invented-page/",
+				"https://security.okta.com/",
+				"https://trust.okta.com/",
+			},
+		},
+	})
+
+	research, err := parseResearch(raw, realResults)
+	if err != nil {
+		t.Fatalf("parseResearch: %v", err)
+	}
+	if !containsSubstring(research.Dropped, "not in the web search results") {
+		t.Errorf("Dropped = %v, want the fabricated citation reported", research.Dropped)
+	}
+	if got := len(research.SupplierDescription.Citations); got != researchMaxCitations {
+		t.Errorf("kept %d citations, want %d valid ones", got, researchMaxCitations)
+	}
+}
