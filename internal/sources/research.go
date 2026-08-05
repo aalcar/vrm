@@ -116,6 +116,24 @@ type Research struct {
 	SearchResults []Citation
 }
 
+// Answered counts the checklist questions that came back with a surviving answer.
+//
+// Tri-state fields are excluded on purpose. A well-behaved run reports no_evidence_found for
+// both Kaspersky and MOVEit, so counting them would mean an otherwise empty checklist always
+// scored two and never looked empty — which is exactly the case this exists to detect.
+func (r Research) Answered() int {
+	n := 0
+	for _, f := range []Finding{
+		r.SupplierDescription, r.ServiceDescription, r.ServiceImplementation,
+		r.SupplierWebsite, r.ServiceWebsite, r.SecurityPage, r.NotificationPage,
+	} {
+		if f.Value != "" {
+			n++
+		}
+	}
+	return n + len(r.CyberLawsuits) + len(r.PastBreaches) + len(r.Locations)
+}
+
 // researchPrompt is the checklist system prompt.
 //
 // Never log this or the rendered request (CLAUDE.md).
@@ -309,6 +327,20 @@ func (r *Researcher) Fetch(ctx context.Context, q Query, ent ResolvedEntity) (Se
 
 	research, err := r.Research(ctx, q, ent)
 	if err != nil {
+		return Failed(SourceResearch, err), err
+	}
+
+	// An empty checklist is not an answer about the vendor (spec §15). A run that returns
+	// nothing renders identically to a vendor nobody could find anything on, and the second
+	// reading is the one an analyst would take. Observed live: a research call came back
+	// with every field empty and no citations, which without this floor would have rendered
+	// as "llm_research ok" above a blank checklist.
+	if answered := research.Answered(); answered == 0 {
+		err := fmt.Errorf(
+			"the checklist came back empty (%d web search results, %d findings dropped): "+
+				"no field could be answered, so this is a failed lookup rather than a vendor "+
+				"with nothing on record",
+			len(research.SearchResults), len(research.Dropped))
 		return Failed(SourceResearch, err), err
 	}
 

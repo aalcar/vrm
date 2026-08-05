@@ -1,10 +1,49 @@
 package sources
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// researchServer points a Researcher at a stub Messages API returning raw as the reply and
+// results as the web-search blocks — the two-part shape a real research response has, and
+// the reason citations have to be checked against something the model did not write.
+func researchServer(t *testing.T, raw string, results []Citation) *Researcher {
+	t.Helper()
+
+	blocks := []map[string]any{}
+	if len(results) > 0 {
+		items := make([]map[string]any, 0, len(results))
+		for _, c := range results {
+			items = append(items, map[string]any{
+				"type": "web_search_result", "url": c.URL, "title": c.Title,
+				"encrypted_content": "stub", "page_age": nil,
+			})
+		}
+		blocks = append(blocks, map[string]any{
+			"type": "web_search_tool_result", "tool_use_id": "srvtoolu_test", "content": items,
+		})
+	}
+	blocks = append(blocks, map[string]any{"type": "text", "text": raw})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "msg_test", "type": "message", "role": "assistant",
+			"model": "claude-sonnet-5", "stop_reason": "end_turn",
+			"content": blocks,
+			"usage":   map[string]any{"input_tokens": 1, "output_tokens": 1},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	return NewResearcher("test-key", "claude-sonnet-5",
+		WithResearcherBaseURL(srv.URL), WithResearcherMaxRetries(0))
+}
 
 // The happy-path fixtures are a real captured reply:
 //
@@ -376,4 +415,58 @@ func containsSubstring(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestEmptyChecklistFailsRatherThanRenderingBlank(t *testing.T) {
+	// Observed live during Phase 8 probing: a research call returned every field empty with
+	// no citations. Without a floor that renders as "llm_research ok" above a blank
+	// checklist — indistinguishable from a vendor nobody could find anything on, and the
+	// second reading is the one an analyst would take (spec §15).
+	srv := researchServer(t, reply(nil), nil)
+
+	section, err := srv.Fetch(context.Background(),
+		Query{Company: "Okta", Service: "SSO"}, ResolvedEntity{})
+	if err == nil {
+		t.Error("Fetch returned no error for an empty checklist")
+	}
+	if section.Status != StatusFailed {
+		t.Fatalf("Status = %q, want %q", section.Status, StatusFailed)
+	}
+	if !strings.Contains(section.Err, "came back empty") {
+		t.Errorf("Err = %q, want it to say the checklist was empty", section.Err)
+	}
+}
+
+func TestOneAnsweredFieldIsEnoughToPass(t *testing.T) {
+	// The floor catches a total collapse, not a thin result. A vendor with little public
+	// footprint legitimately answers few questions, and that is a finding, not a failure.
+	raw := reply(map[string]any{
+		"security_page": map[string]any{
+			"value":     "https://security.okta.com/",
+			"citations": []string{"https://security.okta.com/"},
+		},
+	})
+	srv := researchServer(t, raw, realResults)
+
+	section, err := srv.Fetch(context.Background(),
+		Query{Company: "Okta", Service: "SSO"}, ResolvedEntity{})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if section.Status != StatusOK {
+		t.Fatalf("Status = %q (%s), want %q", section.Status, section.Err, StatusOK)
+	}
+}
+
+func TestAnsweredIgnoresTriStateFields(t *testing.T) {
+	// A well-behaved run reports no_evidence_found for both confabulation-bait questions.
+	// If those counted, an otherwise empty checklist would always score two and never look
+	// empty — defeating the floor entirely.
+	var empty Research
+	empty.UsedKaspersky = TriNoEvidence
+	empty.MOVEitImpacted = TriNoEvidence
+
+	if n := empty.Answered(); n != 0 {
+		t.Errorf("Answered() = %d for a checklist with only tri-state answers, want 0", n)
+	}
 }
