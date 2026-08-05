@@ -16,6 +16,7 @@ package assess
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/aalcar/vrm/internal/sources"
@@ -106,12 +107,24 @@ func (a *Assessor) Run(ctx context.Context, q sources.Query, ent sources.Resolve
 		Cached:   make(map[string]bool, len(a.sources)),
 	}
 
-	for _, src := range a.sources {
-		report.Sections = append(report.Sections, a.runOne(ctx, src, q, ent))
+	results := make([]result, 0, len(a.sources))
+	for i, src := range a.sources {
+		results = append(results, result{index: i, section: a.runOne(ctx, src, q, ent)})
 	}
 
-	sortSections(report.Sections)
+	report.Sections = orderSections(results)
 	return report
+}
+
+// result pairs a section with the registration index of the source that produced it.
+//
+// The index is carried rather than inferred from position. Sources not named in
+// SectionOrder fall back to registration order, and once the fan-out is concurrent the
+// order results arrive in is whatever the network decides — so position stops meaning
+// registration and the report's tail silently reshuffles between runs.
+type result struct {
+	index   int
+	section sources.Section
 }
 
 // runOne executes a single source under its own timeout and converts any outcome into a
@@ -151,26 +164,36 @@ func (a *Assessor) runOne(
 	return section
 }
 
-// sortSections arranges sections into SectionOrder. Unknown sources keep their relative
-// order and follow the known ones, so adding a source cannot reshuffle the report.
-func sortSections(sections []sources.Section) {
-	rank := make(map[string]int, len(SectionOrder))
-	for i, name := range SectionOrder {
-		rank[name] = i
+// orderSections arranges results into SectionOrder. Unknown sources follow the known ones
+// in registration order, so adding a source cannot reshuffle the report.
+//
+// Results may arrive in any order; only the carried index decides where an unknown source
+// lands.
+func orderSections(results []result) []sources.Section {
+	known := make(map[string]bool, len(SectionOrder))
+	for _, name := range SectionOrder {
+		known[name] = true
 	}
 
-	ordered := make([]sources.Section, 0, len(sections))
+	ordered := make([]sources.Section, 0, len(results))
+
+	byIndex := slices.SortedFunc(slices.Values(results), func(a, b result) int {
+		return a.index - b.index
+	})
+
+	// Named sources first, in the documented reading order. Two sources sharing a name keep
+	// their registration order relative to each other.
 	for _, name := range SectionOrder {
-		for _, s := range sections {
-			if s.Source == name {
-				ordered = append(ordered, s)
+		for _, r := range byIndex {
+			if r.section.Source == name {
+				ordered = append(ordered, r.section)
 			}
 		}
 	}
-	for _, s := range sections {
-		if _, known := rank[s.Source]; !known {
-			ordered = append(ordered, s)
+	for _, r := range byIndex {
+		if !known[r.section.Source] {
+			ordered = append(ordered, r.section)
 		}
 	}
-	copy(sections, ordered)
+	return ordered
 }

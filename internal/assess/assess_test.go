@@ -160,6 +160,57 @@ func TestUnknownSourcesAppendAfterKnownOnes(t *testing.T) {
 	}
 }
 
+// orderSections is tested directly because Run cannot yet produce out-of-order results —
+// the loop is still sequential. Once it is concurrent, arrival order is whatever the
+// network decides, and that is exactly the input this pins down.
+func TestOrderSectionsIgnoresArrivalOrder(t *testing.T) {
+	// Registered bitsight, experimental, nvd, other — arriving in reverse.
+	results := []result{
+		{index: 3, section: sources.Section{Source: "other"}},
+		{index: 2, section: sources.Section{Source: "nvd"}},
+		{index: 1, section: sources.Section{Source: "experimental"}},
+		{index: 0, section: sources.Section{Source: "bitsight"}},
+	}
+
+	var got []string
+	for _, s := range orderSections(results) {
+		got = append(got, s.Source)
+	}
+
+	// Known sources take the documented reading order. The two unknown ones follow in
+	// registration order — not arrival order, which here is the exact reverse.
+	if want := "bitsight,nvd,experimental,other"; strings.Join(got, ",") != want {
+		t.Errorf("order = %v, want %s", got, want)
+	}
+}
+
+func TestOrderSectionsIsDeterministic(t *testing.T) {
+	// Shuffling the input must not change the output. Without a carried index this holds
+	// only by accident, because slice position happens to equal registration order while
+	// the loop is sequential.
+	results := []result{
+		{index: 0, section: sources.Section{Source: "alpha"}},
+		{index: 1, section: sources.Section{Source: "caag"}},
+		{index: 2, section: sources.Section{Source: "beta"}},
+		{index: 3, section: sources.Section{Source: "bitsight"}},
+	}
+	const want = "bitsight,caag,alpha,beta"
+
+	for _, shuffled := range [][]result{
+		{results[0], results[1], results[2], results[3]},
+		{results[3], results[2], results[1], results[0]},
+		{results[2], results[0], results[3], results[1]},
+	} {
+		var got []string
+		for _, s := range orderSections(shuffled) {
+			got = append(got, s.Source)
+		}
+		if strings.Join(got, ",") != want {
+			t.Errorf("order = %v, want %s", got, want)
+		}
+	}
+}
+
 func TestReportSurfacesQueryAndEntity(t *testing.T) {
 	// A bad entity mapping has to be visible in the report (spec §15).
 	q := sources.Query{Company: "Okta", Service: "SSO"}
