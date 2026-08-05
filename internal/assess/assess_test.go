@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,13 +19,26 @@ type fakeSource struct {
 	status  sources.Status
 	panics  bool
 	started chan struct{}
+	// blocks, when set, is waited on instead of any delay and is never released by the
+	// source itself. It stands in for a source that ignores its context entirely.
+	blocks chan struct{}
+
+	// calls counts Fetch invocations. Atomic because the fan-out is concurrent.
+	calls atomic.Int64
 }
 
 func (f *fakeSource) Name() string { return f.name }
 
 func (f *fakeSource) Fetch(ctx context.Context, q sources.Query, ent sources.ResolvedEntity) (sources.Section, error) {
+	f.calls.Add(1)
 	if f.started != nil {
 		close(f.started)
+	}
+	if f.blocks != nil {
+		// Deliberately not selecting on ctx.Done(): this is the source that cannot be
+		// interrupted, only abandoned.
+		<-f.blocks
+		return sources.OK(f.name, "value"), nil
 	}
 	if f.panics {
 		panic("boom")
@@ -207,6 +221,71 @@ func TestOrderSectionsIsDeterministic(t *testing.T) {
 		}
 		if strings.Join(got, ",") != want {
 			t.Errorf("order = %v, want %s", got, want)
+		}
+	}
+}
+
+func TestExpiredBudgetStillReportsEverySource(t *testing.T) {
+	// An already-dead context is the degenerate case of running out of budget. Every source
+	// still gets a section: one that is simply absent from the report is indistinguishable
+	// from a category nobody needed to check.
+	srcs := []*fakeSource{
+		{name: "bitsight"}, {name: "nvd"}, {name: "caag"},
+	}
+	a := New([]sources.Source{srcs[0], srcs[1], srcs[2]}, time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := a.Run(ctx, sources.Query{}, sources.ResolvedEntity{})
+
+	if len(r.Sections) != 3 {
+		t.Fatalf("got %d sections, want 3", len(r.Sections))
+	}
+	for _, s := range r.Sections {
+		if s.Status != sources.StatusFailed {
+			t.Errorf("%s status = %q, want failed", s.Source, s.Status)
+		}
+		// Failed, never skipped: skipped is a claim about the vendor ("nothing to query"),
+		// this is a claim about the run.
+		if !strings.Contains(s.Err, "budget expired") {
+			t.Errorf("%s Err = %q, want it to name the expired budget", s.Source, s.Err)
+		}
+	}
+	for _, src := range srcs {
+		if n := src.calls.Load(); n != 0 {
+			t.Errorf("%s was called %d times with no budget left", src.name, n)
+		}
+	}
+}
+
+func TestBudgetExpiryMidRunMarksTheRest(t *testing.T) {
+	// The first source consumes the whole budget. The per-source timeout is deliberately
+	// far larger, so the only thing that can stop the run is the assessment budget.
+	slow := &fakeSource{name: "bitsight", delay: time.Hour}
+	rest := []*fakeSource{{name: "nvd"}, {name: "caag"}}
+	a := New([]sources.Source{slow, rest[0], rest[1]}, time.Hour)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	r := a.Run(ctx, sources.Query{}, sources.ResolvedEntity{})
+
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("run took %v — the assessment budget did not bound it", elapsed)
+	}
+	if len(r.Sections) != 3 {
+		t.Fatalf("got %d sections, want 3", len(r.Sections))
+	}
+	for _, s := range r.Sections {
+		if s.Status != sources.StatusFailed {
+			t.Errorf("%s status = %q, want failed", s.Source, s.Status)
+		}
+	}
+	for _, src := range rest {
+		if n := src.calls.Load(); n != 0 {
+			t.Errorf("%s ran after the budget was gone (%d calls)", src.name, n)
 		}
 	}
 }

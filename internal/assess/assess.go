@@ -109,11 +109,27 @@ func (a *Assessor) Run(ctx context.Context, q sources.Query, ent sources.Resolve
 
 	results := make([]result, 0, len(a.sources))
 	for i, src := range a.sources {
+		if err := ctx.Err(); err != nil {
+			// The assessment budget is gone. Record what did not get to run rather than
+			// leaving it out: an omitted section is invisible, and a category that silently
+			// vanishes from the report reads as one nobody needed to check.
+			results = append(results, result{index: i, section: expired(src.Name(), err)})
+			continue
+		}
 		results = append(results, result{index: i, section: a.runOne(ctx, src, q, ent)})
 	}
 
 	report.Sections = orderSections(results)
 	return report
+}
+
+// expired builds the section for a source that never reported inside the budget.
+//
+// It is a failure, not a skip. StatusSkipped means there was nothing to query — a claim
+// about the vendor. This is a claim about the run, and the two must not look alike.
+func expired(name string, err error) sources.Section {
+	return sources.Failed(name, fmt.Errorf(
+		"no result before the assessment budget expired: %w", err))
 }
 
 // result pairs a section with the registration index of the source that produced it.
