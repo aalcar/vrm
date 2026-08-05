@@ -142,6 +142,13 @@ func runAssess(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// The total budget bounds the whole assessment, resolution included — it is one
+	// assessment, and a run that spent its time resolving has still spent it. Every
+	// per-source deadline derives from this, so they clamp to whatever remains rather than
+	// each getting a fresh budget.
+	ctx, cancelTotal := context.WithTimeout(ctx, cfg.Timeouts.Total.Duration())
+	defer cancelTotal()
+
 	q := sources.Query{Company: company, Service: *service}
 
 	resolution, err := resolve(ctx, cfg, secrets, q)

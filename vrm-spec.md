@@ -464,8 +464,8 @@ cache_ttl: { ... }        # see §11
 
 timeouts:
   per_source: 30s
-  research: 240s          # the checklist call runs a dozen web searches; 45-90s observed
-  total: 360s             # ceiling, not a target; manual sources return instantly
+  research: 480s          # the checklist call runs a dozen web searches; 48-342s observed
+  total: 600s             # ceiling, not a target; manual sources return instantly
 
 nvd:
   results_per_cpe: 20
@@ -556,11 +556,18 @@ And the compiled structured-outputs grammar has a size limit this schema sits ag
 taken from the search results; `state` shares the `city` field for the same reason. `enum`
 was dropped throughout, the parser being where those values have to be validated anyway.
 
-### Phase 8 — Orchestrator fan-out
+### Phase 8 — Orchestrator fan-out ✅
 All sources concurrently after resolution. Independent error collection, per-source and
 total timeouts, stable section order.
 **Done when:** a full assessment completes within the total timeout, and blocking or
 killing any one source still produces a report containing the rest.
+
+`timeouts.total` had been validated on load since Phase 0 and enforced nowhere; it now bounds
+the whole run, resolution included, and every per-source deadline derives from it. A source
+that ignores its context cannot be interrupted, only abandoned — so the collector stops
+waiting when the budget expires and records the outstanding sources as failed rather than
+omitting them. Results arrive over a buffered channel so an abandoned goroutine's send cannot
+block forever.
 
 ### Phase 9 — Caching
 `store` package, per-source TTLs, manual-row exemption, `--no-cache`.

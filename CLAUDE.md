@@ -15,7 +15,7 @@ criterion explicitly — not "looks good," but which criterion is satisfied by w
 **Do not run `git commit` or `git add`.** When a commit's worth of work is finished, say so
 and stop; the analyst reviews and commits. Suggesting a message is welcome.
 
-Phases 0–7 are complete. Phase 8 (concurrent fan-out) is next.
+Phases 0–8 are complete. Phase 9 (caching) is next.
 
 ## Commands
 
