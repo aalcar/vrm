@@ -259,12 +259,22 @@ func TestExpiredBudgetStillReportsEverySource(t *testing.T) {
 	}
 }
 
-func TestBudgetExpiryMidRunMarksTheRest(t *testing.T) {
-	// The first source consumes the whole budget. The per-source timeout is deliberately
-	// far larger, so the only thing that can stop the run is the assessment budget.
-	slow := &fakeSource{name: "bitsight", delay: time.Hour}
-	rest := []*fakeSource{{name: "nvd"}, {name: "caag"}}
-	a := New([]sources.Source{slow, rest[0], rest[1]}, time.Hour)
+func TestBudgetExpiryMarksOnlyTheOutstandingSource(t *testing.T) {
+	// The per-source timeout is deliberately huge, so the assessment budget is the only
+	// thing that can end this run.
+	//
+	// bitsight blocks forever and never checks its context — the source that cannot be
+	// interrupted, only abandoned. Its siblings finish immediately and must keep their real
+	// results: concurrency means a slow source no longer costs the fast ones their answers,
+	// which is the whole point of the fan-out.
+	blocked := make(chan struct{})
+	defer close(blocked)
+
+	a := New([]sources.Source{
+		&fakeSource{name: "bitsight", blocks: blocked},
+		&fakeSource{name: "nvd"},
+		&fakeSource{name: "caag"},
+	}, time.Hour)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -273,19 +283,72 @@ func TestBudgetExpiryMidRunMarksTheRest(t *testing.T) {
 	r := a.Run(ctx, sources.Query{}, sources.ResolvedEntity{})
 
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("run took %v — the assessment budget did not bound it", elapsed)
+		t.Fatalf("run took %v — a source ignoring its context held the report hostage", elapsed)
 	}
 	if len(r.Sections) != 3 {
 		t.Fatalf("got %d sections, want 3", len(r.Sections))
 	}
-	for _, s := range r.Sections {
-		if s.Status != sources.StatusFailed {
-			t.Errorf("%s status = %q, want failed", s.Source, s.Status)
+
+	stuck := sectionFor(t, r, "bitsight")
+	if stuck.Status != sources.StatusFailed {
+		t.Errorf("blocked source status = %q, want failed", stuck.Status)
+	}
+	if !strings.Contains(stuck.Err, "budget expired") {
+		t.Errorf("Err = %q, want it to name the expired budget", stuck.Err)
+	}
+	for _, name := range []string{"nvd", "caag"} {
+		if got := sectionFor(t, r, name).Status; got != sources.StatusOK {
+			t.Errorf("%s status = %q, want ok — it finished well inside the budget", name, got)
 		}
 	}
-	for _, src := range rest {
-		if n := src.calls.Load(); n != 0 {
-			t.Errorf("%s ran after the budget was gone (%d calls)", src.name, n)
+}
+
+func TestSourcesRunConcurrently(t *testing.T) {
+	// Four sources that each sleep well past the point where sequential execution would
+	// blow the budget. Run has to come back in about one delay, not four.
+	const delay = 200 * time.Millisecond
+	a := New([]sources.Source{
+		&fakeSource{name: "bitsight", delay: delay},
+		&fakeSource{name: "nvd", delay: delay},
+		&fakeSource{name: "osv", delay: delay},
+		&fakeSource{name: "caag", delay: delay},
+	}, time.Minute)
+
+	start := time.Now()
+	r := a.Run(context.Background(), sources.Query{}, sources.ResolvedEntity{})
+	elapsed := time.Since(start)
+
+	// Generous bound: the point is to separate "concurrent" from "sequential" (800ms),
+	// not to assert scheduling precision on a loaded CI box.
+	if elapsed > 2*delay {
+		t.Errorf("run took %v for 4 x %v of work — the sources ran sequentially", elapsed, delay)
+	}
+	for _, s := range r.Sections {
+		if s.Status != sources.StatusOK {
+			t.Errorf("%s status = %q, want ok", s.Source, s.Status)
+		}
+	}
+}
+
+func TestConcurrentRunKeepsSectionOrderStable(t *testing.T) {
+	// Completion order is deliberately the reverse of reading order, and two of these are
+	// not in SectionOrder at all. Repeated runs must produce the same report regardless.
+	for range 20 {
+		a := New([]sources.Source{
+			&fakeSource{name: "zeta"},
+			&fakeSource{name: "caag", delay: 2 * time.Millisecond},
+			&fakeSource{name: "alpha"},
+			&fakeSource{name: "bitsight", delay: 4 * time.Millisecond},
+		}, time.Minute)
+
+		r := a.Run(context.Background(), sources.Query{}, sources.ResolvedEntity{})
+
+		var got []string
+		for _, s := range r.Sections {
+			got = append(got, s.Source)
+		}
+		if want := "bitsight,caag,zeta,alpha"; strings.Join(got, ",") != want {
+			t.Fatalf("order = %v, want %s", got, want)
 		}
 	}
 }

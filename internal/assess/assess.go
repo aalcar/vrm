@@ -9,8 +9,9 @@
 // would tear down every sibling the moment one source returned an error, which is exactly
 // the behaviour spec §2.6 forbids.
 //
-// Phase 1 runs sources sequentially; Phase 8 makes the loop concurrent. The isolation
-// model is already correct, so that change adds goroutines rather than undoing anything.
+// Sources run concurrently (Phase 8). The isolation model predates the concurrency —
+// Phase 1 was already written so that no source could affect another — so goroutines were
+// added rather than anything being undone.
 package assess
 
 import (
@@ -107,20 +108,80 @@ func (a *Assessor) Run(ctx context.Context, q sources.Query, ent sources.Resolve
 		Cached:   make(map[string]bool, len(a.sources)),
 	}
 
+	report.Sections = orderSections(a.fanOut(ctx, q, ent))
+	return report
+}
+
+// fanOut runs every source concurrently and collects their sections.
+//
+// # Why a buffered channel, and why the collector may walk away
+//
+// The buffer holds one result per source, so a send never blocks. That matters because the
+// collector stops waiting when the budget expires: a source still running afterwards will
+// eventually send, and on an unbuffered channel that send would block forever and leak the
+// goroutine permanently. Buffered, the value lands unread and the goroutine exits.
+//
+// Walking away is the only defence against a source that ignores its context. A per-source
+// context.WithTimeout cannot interrupt code that never checks Done — it can only be
+// abandoned. Waiting for every goroutine would let one such source hold the whole report
+// hostage, which spec §2.6 forbids.
+//
+// No errgroup, here or anywhere in this package: it would cancel every sibling the moment
+// one source errored.
+func (a *Assessor) fanOut(ctx context.Context, q sources.Query, ent sources.ResolvedEntity) []result {
 	results := make([]result, 0, len(a.sources))
-	for i, src := range a.sources {
-		if err := ctx.Err(); err != nil {
-			// The assessment budget is gone. Record what did not get to run rather than
-			// leaving it out: an omitted section is invisible, and a category that silently
-			// vanishes from the report reads as one nobody needed to check.
-			results = append(results, result{index: i, section: expired(src.Name(), err)})
-			continue
-		}
-		results = append(results, result{index: i, section: a.runOne(ctx, src, q, ent)})
+	reported := make(map[int]bool, len(a.sources))
+
+	// No budget at all. Report every source without calling out: work started against a
+	// dead context can only fail, and firing off requests nobody will wait for is worse
+	// than not making them.
+	if err := ctx.Err(); err != nil {
+		return a.expireOutstanding(results, reported, err)
 	}
 
-	report.Sections = orderSections(results)
-	return report
+	pending := make(chan result, len(a.sources))
+	for i, src := range a.sources {
+		go func() {
+			// runOne contains its own panics, so a goroutine cannot take the process down.
+			pending <- result{index: i, section: a.runOne(ctx, src, q, ent)}
+		}()
+	}
+
+	for range a.sources {
+		select {
+		case r := <-pending:
+			reported[r.index] = true
+			results = append(results, r)
+
+		case <-ctx.Done():
+			// Collect anything already delivered before writing the rest off. A result
+			// sitting in the buffer is a real answer, and select picks freely among ready
+			// cases — discarding it for a timing coincidence would make the report depend
+			// on which case the runtime happened to choose.
+		drain:
+			for {
+				select {
+				case r := <-pending:
+					reported[r.index] = true
+					results = append(results, r)
+				default:
+					break drain
+				}
+			}
+			return a.expireOutstanding(results, reported, ctx.Err())
+		}
+	}
+	return results
+}
+
+// expireOutstanding records a section for every source that has not reported.
+func (a *Assessor) expireOutstanding(results []result, reported map[int]bool, err error) []result {
+	for i, src := range a.sources {
+		if !reported[i] {
+			results = append(results, result{index: i, section: expired(src.Name(), err)})
+		}
+	}
+	return results
 }
 
 // expired builds the section for a source that never reported inside the budget.
