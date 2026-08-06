@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/aalcar/vrm/internal/sources"
 )
 
 // knownSources are the automated sources defined in spec §6. The set is fixed: adding a
@@ -31,7 +33,7 @@ var knownSources = []string{"bitsight", "nvd", "osv", "fedramp", "caag", "llm_re
 //
 // llm_research used to be listed here. It is a Source now — it runs inside the fan-out like
 // any other, which is what lets it fail or skip without taking the assessment with it.
-var nonSourceTTLs = []string{"resolution"}
+var nonSourceTTLs = []string{sources.ResolutionKey}
 
 // Duration wraps time.Duration so YAML strings like "24h" parse correctly.
 //

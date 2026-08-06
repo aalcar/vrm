@@ -233,3 +233,135 @@ func TestCachedSectionNormalizesTheKey(t *testing.T) {
 		t.Error("a section written under a differently-spaced name did not come back")
 	}
 }
+
+func resolutionFixture() sources.Resolution {
+	return sources.Resolution{
+		Entity: sources.ResolvedEntity{
+			CanonicalName: "Okta, Inc.",
+			Domains:       []string{"okta.com"},
+			CPEs:          []string{"cpe:2.3:a:okta:okta:*:*:*:*:*:*:*:*"},
+			Packages:      []sources.Package{{Ecosystem: "npm", Name: "@okta/okta-auth-js"}},
+			Aliases:       []string{"Auth0"},
+		},
+		Dropped: []string{`cpe "okta" (not a well-formed CPE 2.3 string)`},
+	}
+}
+
+func TestCachedResolutionRoundTrip(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	company, service := uniqueQuery(t, st)
+	want := resolutionFixture()
+
+	if err := st.PutResolution(ctx, company, service, want); err != nil {
+		t.Fatalf("PutResolution: %v", err)
+	}
+
+	got, hit, err := st.CachedResolution(ctx, company, service, time.Hour)
+	if err != nil {
+		t.Fatalf("CachedResolution: %v", err)
+	}
+	if !hit {
+		t.Fatal("a resolution written a moment ago did not come back")
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("round trip changed the resolution\n got: %#v\nwant: %#v", got, want)
+	}
+	// Dropped identifiers are part of the answer, not commentary on it: they are what tells
+	// an analyst a CPE was thrown out rather than never offered.
+	if len(got.Dropped) != 1 {
+		t.Errorf("Dropped = %v, want the one dropped CPE", got.Dropped)
+	}
+}
+
+func TestCachedResolutionExpiresAtTheTTLBoundary(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	company, service := uniqueQuery(t, st)
+
+	if err := st.PutResolution(ctx, company, service, resolutionFixture()); err != nil {
+		t.Fatalf("PutResolution: %v", err)
+	}
+	backdate(t, st, company, service, sources.ResolutionKey, 2*time.Hour)
+
+	if _, hit, err := st.CachedResolution(ctx, company, service, time.Hour); err != nil {
+		t.Fatalf("CachedResolution: %v", err)
+	} else if hit {
+		t.Error("a two-hour-old resolution was served under a one-hour TTL")
+	}
+	if _, hit, err := st.CachedResolution(ctx, company, service, 3*time.Hour); err != nil {
+		t.Fatalf("CachedResolution: %v", err)
+	} else if !hit {
+		t.Error("a two-hour-old resolution was not served under a three-hour TTL")
+	}
+}
+
+// TestResolutionAndSectionsShareAKeyWithoutColliding pins the namespace. Resolution is stored
+// under its own pseudo-source name in the same table; if that name ever collided with a real
+// source, one would decode as the other.
+func TestResolutionAndSectionsShareAKeyWithoutColliding(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	company, service := uniqueQuery(t, st)
+
+	if err := st.PutResolution(ctx, company, service, resolutionFixture()); err != nil {
+		t.Fatalf("PutResolution: %v", err)
+	}
+	if err := st.PutSection(ctx, company, service, sources.SourceBitSight, cachedFixture()); err != nil {
+		t.Fatalf("PutSection: %v", err)
+	}
+
+	res, hit, err := st.CachedResolution(ctx, company, service, time.Hour)
+	if err != nil || !hit {
+		t.Fatalf("CachedResolution: hit %v, err %v", hit, err)
+	}
+	if res.Entity.CanonicalName != "Okta, Inc." {
+		t.Errorf("CanonicalName = %q", res.Entity.CanonicalName)
+	}
+
+	section, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour)
+	if err != nil || !hit {
+		t.Fatalf("CachedSection: hit %v, err %v", hit, err)
+	}
+	if _, ok := section.Data.(sources.BitSightRating); !ok {
+		t.Errorf("Data is %T, want sources.BitSightRating", section.Data)
+	}
+
+	// And resolution is not reachable through the section reader, which has no codec for it.
+	if _, _, err := st.CachedSection(ctx, company, service, sources.ResolutionKey, time.Hour); err == nil {
+		t.Error("the resolution row was readable as a section")
+	}
+}
+
+// TestResolutionWithoutACanonicalNameIsRefused: every deterministic source keys off the
+// canonical name, so caching a mapping without one would pin a report in which everything
+// skipped — which reads as "nothing to report" rather than "resolution broke".
+func TestResolutionWithoutACanonicalNameIsRefused(t *testing.T) {
+	st := testStore(t)
+	company, service := uniqueQuery(t, st)
+
+	err := st.PutResolution(context.Background(), company, service,
+		sources.Resolution{Entity: sources.ResolvedEntity{Domains: []string{"okta.com"}}})
+	if err == nil {
+		t.Fatal("cached a resolution with no canonical name")
+	}
+}
+
+func TestPutResolutionRefusesToOverwriteAManualEntry(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	company, service := uniqueQuery(t, st)
+
+	if err := st.SetManual(ctx, company, service, sources.ResolutionKey, "analyst mapping"); err != nil {
+		t.Fatalf("SetManual: %v", err)
+	}
+
+	if err := st.PutResolution(ctx, company, service, resolutionFixture()); err == nil {
+		t.Fatal("an automated resolution write landed on a manual row")
+	}
+
+	entry, found, err := st.ManualEntry(ctx, company, service, sources.ResolutionKey)
+	if err != nil || !found || entry.Value != "analyst mapping" {
+		t.Fatalf("manual entry did not survive: %q, found %v, err %v", entry.Value, found, err)
+	}
+}

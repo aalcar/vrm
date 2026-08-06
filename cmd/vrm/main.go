@@ -13,12 +13,17 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/aalcar/vrm/internal/assess"
 	"github.com/aalcar/vrm/internal/config"
 	"github.com/aalcar/vrm/internal/sources"
 	"github.com/aalcar/vrm/internal/store"
 )
+
+// cacheWriteTimeout bounds recording the resolution. Short on purpose: the mapping is already
+// in hand, and a slow database must not become a slow assessment.
+const cacheWriteTimeout = 5 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -103,9 +108,9 @@ func runAssess(ctx context.Context, args []string) error {
 	domain := fset.String("domain", "", "vendor domain, overriding entity resolution")
 	cpeFlag := fset.String("cpe", "",
 		"comma-separated CPEs to query NVD with, overriding entity resolution")
-	// Wired now, but automated-source caching is Phase 9, so today it has nothing to
-	// bypass. What it must never do — clear analyst-supplied manual entries — is already
-	// true and already tested, which is the point of adding the flag before the cache.
+	// Skips the cache read for every automated source and for resolution, then records what
+	// it fetched — forcing a fresh call is the point, leaving yesterday's row behind is not.
+	// It clears nothing, so an analyst's manual entries cannot be caught up in it (spec §11).
 	noCache := fset.Bool("no-cache", false,
 		"re-query automated sources; recorded manual entries are never cleared")
 	if err := fset.Parse(args); err != nil {
@@ -151,7 +156,7 @@ func runAssess(ctx context.Context, args []string) error {
 
 	q := sources.Query{Company: company, Service: *service}
 
-	resolution, err := resolve(ctx, cfg, secrets, q)
+	resolution, resolutionCached, err := resolve(ctx, cfg, secrets, st, q, *noCache)
 	if err != nil {
 		// Fatal, unlike a source failure. Every deterministic source keys off the resolved
 		// entity, so continuing would produce a report in which everything skipped — and
@@ -188,7 +193,7 @@ func runAssess(ctx context.Context, args []string) error {
 	fmt.Printf("  cache key: %s / %s\n",
 		store.NormalizeKey(q.Company), store.NormalizeKey(q.Service))
 
-	printEntity(ent, resolution.Dropped, overridden, cpesOverridden)
+	printEntity(ent, resolution.Dropped, overridden, cpesOverridden, resolutionCached)
 
 	fmt.Printf("\nconfig %s\n", *configPath)
 	fmt.Printf("  models:    resolution=%s research=%s\n",
@@ -209,19 +214,53 @@ func runAssess(ctx context.Context, args []string) error {
 	return nil
 }
 
-// resolve runs entity resolution under the per-source timeout.
+// resolve returns the entity mapping, from cache when one is fresh, and reports which it was.
+//
+// Resolution is cached separately from the sources rather than through the same decorator: it
+// is not a Source, it runs before the fan-out, and a failure here is fatal to the run where a
+// source failure is not.
 func resolve(
 	ctx context.Context,
 	cfg *config.Config,
 	secrets *config.Secrets,
+	st *store.Store,
 	q sources.Query,
-) (sources.Resolution, error) {
+	noCache bool,
+) (sources.Resolution, bool, error) {
+	ttl, cacheable := cfg.TTL(sources.ResolutionKey)
+
+	if cacheable && !noCache {
+		res, hit, err := st.CachedResolution(ctx, q.Company, q.Service, ttl)
+		switch {
+		case err != nil:
+			// A sick cache costs a slow answer, never no answer.
+			warnCache(fmt.Errorf("resolution: %w", err))
+		case hit:
+			return res, true, nil
+		}
+	}
+
 	resolver := sources.NewResolver(secrets.AnthropicAPIKey, cfg.Models.Resolution)
 
 	resCtx, cancel := context.WithTimeout(ctx, cfg.Timeouts.PerSource.Duration())
 	defer cancel()
 
-	return resolver.Resolve(resCtx, q)
+	res, err := resolver.Resolve(resCtx, q)
+	if err != nil {
+		return res, false, err
+	}
+
+	if cacheable {
+		// Its own context, for the same reason a source's cache write gets one: the answer
+		// is already in hand and must not be lost to the clock that bounded obtaining it.
+		writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), cacheWriteTimeout)
+		defer cancelWrite()
+
+		if err := st.PutResolution(writeCtx, q.Company, q.Service, res); err != nil {
+			warnCache(fmt.Errorf("resolution: %w", err))
+		}
+	}
+	return res, false, nil
 }
 
 // printEntity surfaces the resolved entity before any results derived from it.
@@ -229,8 +268,17 @@ func resolve(
 // Entity resolution is the weakest link in the system: a wrong CPE silently returns another
 // vendor's CVEs and nothing fails. Showing the mapping — and anything validation threw out —
 // is what lets an analyst catch that before acting on it (spec §15).
-func printEntity(ent sources.ResolvedEntity, dropped []string, domainOverridden, cpesOverridden bool) {
+func printEntity(
+	ent sources.ResolvedEntity,
+	dropped []string,
+	domainOverridden, cpesOverridden, cached bool,
+) {
 	fmt.Printf("\nresolved entity\n")
+	if cached {
+		// Worth saying: a cached mapping was not re-derived this run, so a model that
+		// would resolve this vendor differently today has not been consulted.
+		fmt.Printf("  (cached; --no-cache re-resolves)\n")
+	}
 	fmt.Printf("  canonical: %s\n", ent.CanonicalName)
 	fmt.Printf("  domains:   %s", orNone(ent.Domains))
 	if domainOverridden {

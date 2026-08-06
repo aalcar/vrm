@@ -294,6 +294,83 @@ func (s *Store) PutSection(
 	return nil
 }
 
+// CachedResolution reads an entity resolution that is still inside its TTL.
+//
+// # A cached mapping is a persistent one
+//
+// Resolution is the weakest link in the system (spec §15) and this pins its answer for as
+// long as its TTL allows — 720h by default, because an entity mapping is near-static. What
+// makes that acceptable is that the resolved entity is printed at the top of every report,
+// so a wrong mapping is visible on every run rather than only the one that produced it, and
+// --no-cache re-resolves while --domain and --cpe override the parts that matter.
+func (s *Store) CachedResolution(
+	ctx context.Context,
+	company, service string,
+	ttl time.Duration,
+) (sources.Resolution, bool, error) {
+	if ttl <= 0 {
+		return sources.Resolution{}, false, nil
+	}
+
+	var raw []byte
+	err := s.pool.QueryRow(ctx,
+		`SELECT section FROM assessments_cache
+		 WHERE company = $1 AND service = $2 AND source = $3
+		   AND NOT manual
+		   AND fetched_at > now() - make_interval(secs => $4)`,
+		NormalizeKey(company), NormalizeKey(service), sources.ResolutionKey, ttl.Seconds(),
+	).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return sources.Resolution{}, false, nil
+	}
+	if err != nil {
+		return sources.Resolution{}, false, fmt.Errorf("read cached resolution: %w", err)
+	}
+
+	var res sources.Resolution
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return sources.Resolution{}, false, fmt.Errorf("cached resolution is unreadable: %w", err)
+	}
+	// A resolution with no canonical name is not a mapping, and every deterministic source
+	// keys off one. Serving it would produce a report in which everything skipped.
+	if res.Entity.CanonicalName == "" {
+		return sources.Resolution{}, false, fmt.Errorf(
+			"cached resolution has no canonical name; re-resolving")
+	}
+	return res, true, nil
+}
+
+// PutResolution records an entity resolution.
+//
+// Unlike a Section this needs no codec: Resolution is a plain struct with no `any` in it, so
+// encoding/json round-trips it into its own concrete type unaided.
+func (s *Store) PutResolution(ctx context.Context, company, service string, res sources.Resolution) error {
+	if res.Entity.CanonicalName == "" {
+		return errors.New("refusing to cache a resolution with no canonical name")
+	}
+
+	payload, err := json.Marshal(res)
+	if err != nil {
+		return fmt.Errorf("encode resolution: %w", err)
+	}
+
+	tag, err := s.pool.Exec(ctx,
+		`INSERT INTO assessments_cache (company, service, source, section, fetched_at, manual)
+		 VALUES ($1, $2, $3, $4, now(), false)
+		 ON CONFLICT (company, service, source)
+		 DO UPDATE SET section = EXCLUDED.section, fetched_at = now()
+		 WHERE NOT assessments_cache.manual`,
+		NormalizeKey(company), NormalizeKey(service), sources.ResolutionKey, payload)
+	if err != nil {
+		return fmt.Errorf("cache resolution: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New(
+			"refused to cache the resolution: an analyst's manual entry occupies that row")
+	}
+	return nil
+}
+
 // NormalizeKey canonicalizes a company or service name for use in the assessments_cache
 // primary key, so "Okta", " okta " and "Okta  Inc" address the row an analyst expects.
 //

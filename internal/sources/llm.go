@@ -143,6 +143,15 @@ func NewResolver(apiKey, model string, opts ...ResolverOption) *Resolver {
 	}
 }
 
+// ResolutionKey is the name entity resolution is cached and configured under.
+//
+// It is not a source — resolution runs before the fan-out and implements no Source interface
+// — but it shares the cache's (company, service, source) key shape and gets its own TTL in
+// cache_ttl. The constant is shared so the store, the config validator and the CLI cannot
+// drift apart: a typo in any one of them would silently mean resolution is never cached, and
+// nothing would fail.
+const ResolutionKey = "resolution"
+
 // Resolution is the outcome of an entity-resolution call.
 type Resolution struct {
 	Entity ResolvedEntity
