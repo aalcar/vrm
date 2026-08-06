@@ -1,7 +1,11 @@
 // Package store owns the Postgres connection and the assessments cache schema.
 //
-// Phase 0 establishes the connection and applies migrations. Phase 5 adds the manual-entry
-// read and write. The general read-through cache and TTL logic arrive in Phase 9.
+// # Two populations, one table
+//
+// assessments_cache holds two different JSON shapes discriminated by the manual column:
+// cached Sections written by automated sources, and analyst-recorded answers. Every read
+// and every write filters on that column. A manual row read as a Section would fail to
+// decode, and an automated write landing on a manual row would destroy analyst data.
 //
 // # Manual entries are analyst data, not cache
 //
@@ -203,6 +207,89 @@ func (s *Store) SetManual(ctx context.Context, company, service, source, value s
 		NormalizeKey(company), NormalizeKey(service), source, payload)
 	if err != nil {
 		return fmt.Errorf("record manual entry for %s: %w", source, err)
+	}
+	return nil
+}
+
+// CachedSection reads a section that is still inside its TTL.
+//
+// The boolean reports a usable hit. A row that has aged out is reported the same way as no
+// row at all, because the caller does the same thing with either: fetch. Nothing is deleted
+// on expiry — the fresh result overwrites it, and a row that is never re-requested costs
+// nothing but a little disk.
+//
+// The TTL comparison happens in Postgres rather than in Go. fetched_at is written by the
+// database's clock, so comparing it against the application's would make freshness depend on
+// how closely two machines agree.
+func (s *Store) CachedSection(
+	ctx context.Context,
+	company, service, source string,
+	ttl time.Duration,
+) (sources.Section, bool, error) {
+	// A source with no configured TTL is not cached at all. Treating a non-positive TTL as
+	// "always fresh" would turn a missing config line into a permanent cache.
+	if ttl <= 0 {
+		return sources.Section{}, false, nil
+	}
+
+	var raw []byte
+	err := s.pool.QueryRow(ctx,
+		`SELECT section FROM assessments_cache
+		 WHERE company = $1 AND service = $2 AND source = $3
+		   AND NOT manual
+		   AND fetched_at > now() - make_interval(secs => $4)`,
+		NormalizeKey(company), NormalizeKey(service), source, ttl.Seconds(),
+	).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return sources.Section{}, false, nil
+	}
+	if err != nil {
+		return sources.Section{}, false, fmt.Errorf("read cached section for %s: %w", source, err)
+	}
+
+	section, err := sources.DecodeSection(source, raw)
+	if err != nil {
+		// A row that cannot be decoded is reported rather than swallowed. Silently treating
+		// it as a miss would hide a schema change behind nothing worse than a slow run, and
+		// the next write overwrites it anyway.
+		return sources.Section{}, false, fmt.Errorf("cached section for %s is unreadable: %w", source, err)
+	}
+	return section, true, nil
+}
+
+// PutSection records a section, replacing any previous one for the same key.
+//
+// Which sections are worth caching is not decided here — that rule lives with the caching
+// source in internal/sources, next to the code that knows what a fresh result cost.
+//
+// The upsert refuses to touch a manual row. Configuration already keeps automated and manual
+// source names apart, so this should be unreachable; it is written as a loud error rather
+// than a silent no-op because the thing it protects is the one kind of data in this tool that
+// cannot be re-fetched.
+func (s *Store) PutSection(
+	ctx context.Context,
+	company, service, source string,
+	section sources.Section,
+) error {
+	payload, err := sources.EncodeSection(section)
+	if err != nil {
+		return fmt.Errorf("encode section for %s: %w", source, err)
+	}
+
+	tag, err := s.pool.Exec(ctx,
+		`INSERT INTO assessments_cache (company, service, source, section, fetched_at, manual)
+		 VALUES ($1, $2, $3, $4, now(), false)
+		 ON CONFLICT (company, service, source)
+		 DO UPDATE SET section = EXCLUDED.section, fetched_at = now()
+		 WHERE NOT assessments_cache.manual`,
+		NormalizeKey(company), NormalizeKey(service), source, payload)
+	if err != nil {
+		return fmt.Errorf("cache section for %s: %w", source, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf(
+			"refused to cache %s: an analyst's manual entry occupies that row and is never "+
+				"overwritten automatically", source)
 	}
 	return nil
 }
