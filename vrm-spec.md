@@ -169,13 +169,17 @@ All automated sources implement `Source` and run concurrently after entity resol
 | **FedRAMP Marketplace** | product / company name | **No official public API** — scrape | Read `www.fedramp.gov/marketplace/products/`. `marketplace.fedramp.gov` is now a SvelteKit shell that only redirects there, and its former `/api/v1/providers` JSON API returns **404**. The listing is ~4.7 MB of server-rendered HTML carrying the whole catalogue (674 offerings when built), so it is fetched whole and filtered locally. **Parse the per-record variable assignments, not the nested `{id,csp,cso,status,…}` literals** — those are `leveraged_systems` dependency lists whose status is stale. See §15. |
 | **CA Attorney General** | company name | No API — scrape the public breach-notification list | `oag.ca.gov/privacy/databreach/list`, filtered by `field_sb24_org_name_value`. A Drupal view with stable per-column classes. Authoritative for breaches **reported in California** — an empty result is never "never breached". The filter is a **substring** match, so record each row's organization name as filed rather than assuming it is the vendor. **A no-match page renders no `<table>` at all**, only a `view-empty` div; that div is the only thing distinguishing a clean vendor from a broken parser. |
 
-> **FedRAMP is broken upstream as of 2026-08-05.** `www.fedramp.gov/marketplace/products/`
-> now serves a 39 KB client-rendered SvelteKit shell with no catalogue in the HTML — the
-> 4.7 MB server-rendered listing this parser was built against a day earlier is gone, and no
-> replacement data source has been identified yet. The source fails loudly (`StatusFailed`,
-> "the listing page layout has changed") rather than reporting every vendor as unlisted,
-> which is the behaviour the record floor exists for. Finding the new data location is
-> outstanding work; do not soften the floor to make the section green again.
+> **FedRAMP went client-rendered for part of 2026-08-05 and came back.** For several hours
+> `www.fedramp.gov/marketplace/products/` served a 39 KB SvelteKit shell with no catalogue in
+> the HTML, and `fedramp` returned `StatusFailed` ("the listing page layout has changed") on
+> every run rather than reporting every vendor as unlisted. By that evening the page was
+> server-rendered again — 4.7 MB, 691 `.csp="` records — and the parser worked unchanged.
+>
+> Nothing was changed in response, which is the point worth keeping. The record floor turned
+> an upstream outage into a visible failure and then got out of the way, and had the floor
+> been lowered to make the section green during those hours, the tool would have spent them
+> reporting confidently that no vendor is FedRAMP authorized. Expect this to recur; if it
+> does, find the data rather than softening the floor.
 
 **Scrape fragility.** `fedramp.go` and `caag.go` parse HTML that will change without
 notice. Each must: isolate its parsing in one function, ship with a recorded HTML fixture
@@ -590,10 +594,26 @@ waiting when the budget expires and records the outstanding sources as failed ra
 omitting them. Results arrive over a buffered channel so an abandoned goroutine's send cannot
 block forever.
 
-### Phase 9 — Caching
+### Phase 9 — Caching ✅
 `store` package, per-source TTLs, manual-row exemption, `--no-cache`.
 **Done when:** a repeat assessment within TTL is visibly faster with `Cached` flags set;
 `--no-cache` forces fresh automated calls and preserves manual entries.
+
+Measured on Okta / SSO: **30.2s, 33.5s, 35.5s fresh; 0.05s, 0.05s, 0.05s cached.** A manual
+entry recorded beforehand survived all three `--no-cache` runs and is never marked cached,
+since manual sources are never wrapped at all.
+
+Two things shaped the implementation. `Section.Data` is an `any` holding a concrete struct, so
+`json.Unmarshal` gives back a `map[string]any` — which the renderer's type switch matches no
+case of, producing a green heading with nothing under it. Decoding is therefore table-driven
+per source, and encoding is checked against the same table so a mis-registered source fails at
+write time. And the cache write runs on its own context: fetching can consume a source's whole
+deadline, and borrowing that context would make the most expensive result in the tool the one
+least likely to be cached.
+
+Only `StatusOK` is stored. A failure is a fact about the run, not about the vendor, and
+caching one would pin an upstream blip for the source's full TTL with no way to tell a cached
+failure from a live one — as the FedRAMP outage above would have done for 168h.
 
 ### Phase 10 — CLI rendering
 Concise terminal report: resolved entity, BitSight grade, CVE/OSV summary, FedRAMP status,

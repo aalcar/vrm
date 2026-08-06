@@ -16,13 +16,16 @@ anything. [`CLAUDE.md`](CLAUDE.md) covers invariants and workflow.
 
 ## Status
 
-**Phases 0–7 complete**; Phase 8 (concurrent fan-out) is next. See spec §13 for the full
+**Phases 0–9 complete**; Phase 10 (CLI rendering) is next. See spec §13 for the full
 phased plan.
 
 `vrm assess` today resolves a company + service to machine identifiers via the Anthropic
-API, then queries every source below and prints a sourced report. The fan-out is still
-sequential (Phase 8), caching is not wired (Phase 9), the renderer is deliberately plain
-(Phase 10), and there is no web UI yet (Phase 11).
+API, queries every source below concurrently, and prints a sourced report. Successful
+sections and the entity resolution are cached in Postgres under per-source TTLs, so a repeat
+assessment inside the TTL takes 0.05s against roughly 30s for a fresh one. `--no-cache`
+forces fresh calls; analyst-recorded manual entries never expire and are never cleared by it.
+
+The renderer is still deliberately plain (Phase 10) and there is no web UI yet (Phase 11).
 
 | Source | Keyed on | State |
 |---|---|---|

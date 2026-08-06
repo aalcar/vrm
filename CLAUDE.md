@@ -15,12 +15,15 @@ criterion explicitly — not "looks good," but which criterion is satisfied by w
 **Do not run `git commit` or `git add`.** When a commit's worth of work is finished, say so
 and stop; the analyst reviews and commits. Suggesting a message is welcome.
 
-Phases 0–8 are complete. Phase 9 (caching) is next.
+Phases 0–9 are complete. Phase 10 (CLI rendering) is next.
 
-**FedRAMP is broken upstream (2026-08-05).** The marketplace listing went client-rendered
-and the catalogue is no longer in the HTML, so `fedramp` fails loudly on every run. That is
-the record floor working as intended. Finding the new data location is a task in its own
-right — do not lower the floor to turn the section green.
+**FedRAMP broke and recovered inside a day (2026-08-05).** The marketplace listing served a
+39 KB client-rendered SvelteKit shell for part of that day and `fedramp` failed loudly on
+every run; by the evening it was back to 4.7 MB of server-rendered HTML with 691 authoritative
+`.csp="` records, and the parser works unchanged. Nothing was fixed and nothing needs fixing —
+the record floor did its job in both directions. Treat this as evidence the page can change
+under you at any time, not as an incident that is closed: if it fails again, find the data,
+do not lower the floor.
 
 ## Commands
 
@@ -89,6 +92,20 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   Manual sources start skipped. Do not "fix" these.
 - **Manual entries are analyst data.** They live in the cache table for convenience only.
   Never expire them, never clear them on `--no-cache`, never overwrite them automatically.
+  Every read and write filters on the `manual` column, in both directions: the table holds two
+  different JSON shapes and that boolean is the only thing telling them apart.
+- **Only successful sections are cached.** A failure is a fact about the run, not about the
+  vendor; caching one pins an upstream blip for the whole TTL — 168h for FedRAMP — and an
+  analyst cannot tell a cached failure from a live one. A skip is worse: it is derived from
+  the resolved entity, so it would outlive the resolution fix meant to clear it.
+- **A cached `Section.Data` must come back as its concrete type.** `json.Unmarshal` into an
+  `any` yields a `map`, the renderer's type switch matches no case, and the section renders as
+  a green heading with nothing under it. Decoding is table-driven per source and encoding is
+  checked against the same table. Never add a source without registering its codec — a test
+  enforces this, because the failure is silent.
+- **A cache write gets its own context.** Fetching can consume a source's entire deadline;
+  borrowing that context to record the result would make the most expensive answer in the tool
+  the least likely to be cached. A cache failure warns and never fails a section.
 - **No editorializing.** Record values and citations. Severity judgments, timelines, and
   narrative are the analyst's job, not generated output.
 - **`html/template` only**, never `text/template`. Report data is externally sourced and
