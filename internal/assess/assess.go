@@ -109,6 +109,15 @@ func (a *Assessor) Run(ctx context.Context, q sources.Query, ent sources.Resolve
 	}
 
 	report.Sections = orderSections(a.fanOut(ctx, q, ent))
+
+	// Folded from the sections rather than written during the fan-out: a map shared across
+	// concurrent sources would be a data race, and the flag is a property of the section
+	// anyway (spec §11).
+	for _, s := range report.Sections {
+		if s.Cached {
+			report.Cached[s.Source] = true
+		}
+	}
 	return report
 }
 

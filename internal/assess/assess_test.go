@@ -3,6 +3,7 @@ package assess
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,11 +14,14 @@ import (
 
 // fakeSource lets a test script one source's behaviour precisely.
 type fakeSource struct {
-	name    string
-	delay   time.Duration
-	err     error
-	status  sources.Status
-	panics  bool
+	name   string
+	delay  time.Duration
+	err    error
+	status sources.Status
+	panics bool
+	// cached marks the returned section as having come from the cache, the way the caching
+	// source in internal/sources does.
+	cached  bool
 	started chan struct{}
 	// blocks, when set, is waited on instead of any delay and is never released by the
 	// source itself. It stands in for a source that ignores its context entirely.
@@ -56,7 +60,9 @@ func (f *fakeSource) Fetch(ctx context.Context, q sources.Query, ent sources.Res
 	if f.status == sources.StatusSkipped {
 		return sources.Skipped(f.name, "nothing to query"), nil
 	}
-	return sources.OK(f.name, "value"), nil
+	section := sources.OK(f.name, "value")
+	section.Cached = f.cached
+	return section, nil
 }
 
 func sectionFor(t *testing.T, r *Report, name string) sources.Section {
@@ -365,5 +371,33 @@ func TestReportSurfacesQueryAndEntity(t *testing.T) {
 	}
 	if r.Entity.CanonicalName != ent.CanonicalName || len(r.Entity.Domains) != 1 {
 		t.Errorf("Entity = %+v, want %+v", r.Entity, ent)
+	}
+}
+
+// TestReportCollectsTheCacheFlags checks the fold from sections into Report.Cached.
+//
+// The flag travels on each Section rather than being written to a shared map during the
+// fan-out, which would be a data race. This test runs under -race with several sources
+// reporting at once, so a regression to a shared map is caught here rather than
+// intermittently in production.
+func TestReportCollectsTheCacheFlags(t *testing.T) {
+	srcs := []sources.Source{
+		&fakeSource{name: "bitsight", cached: true},
+		&fakeSource{name: "nvd"},
+		&fakeSource{name: "caag", cached: true},
+		&fakeSource{name: "osv", status: sources.StatusSkipped},
+	}
+
+	report := New(srcs, time.Second).Run(context.Background(), sources.Query{}, sources.ResolvedEntity{})
+
+	want := map[string]bool{"bitsight": true, "caag": true}
+	if !reflect.DeepEqual(report.Cached, want) {
+		t.Errorf("Cached = %v, want %v", report.Cached, want)
+	}
+
+	// A section that was not cached must not appear at all. An entry set to false would read
+	// as "we know this was live" in a map whose absence already means exactly that.
+	if _, present := report.Cached["nvd"]; present {
+		t.Error("a live section left an entry in Cached")
 	}
 }

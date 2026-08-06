@@ -178,7 +178,7 @@ func runAssess(ctx context.Context, args []string) error {
 		ent.CPEs = cpes
 	}
 
-	report := assess.New(registerSources(cfg, secrets, st), cfg.Timeouts.PerSource.Duration(),
+	report := assess.New(registerSources(cfg, secrets, st, *noCache), cfg.Timeouts.PerSource.Duration(),
 		assess.WithSourceTimeout(sources.SourceResearch, cfg.Timeouts.Research.Duration())).
 		Run(ctx, q, ent)
 
@@ -365,33 +365,55 @@ func manualNames(cfg *config.Config) []string {
 	return names
 }
 
-func registerSources(cfg *config.Config, secrets *config.Secrets, st *store.Store) []sources.Source {
+func registerSources(
+	cfg *config.Config,
+	secrets *config.Secrets,
+	st *store.Store,
+	noCache bool,
+) []sources.Source {
+	// cached wraps an automated source in its configured TTL. A source with no cache_ttl
+	// entry comes back unwrapped, so an omitted line means "do not cache" rather than
+	// something halfway.
+	cached := func(src sources.Source) sources.Source {
+		ttl, ok := cfg.TTL(src.Name())
+		if !ok {
+			return src
+		}
+		return sources.Caching(src, st, ttl,
+			sources.WithCacheBypass(noCache),
+			sources.WithCacheWarner(warnCache))
+	}
+
 	var srcs []sources.Source
 	if cfg.Sources[sources.SourceBitSight] {
-		srcs = append(srcs, sources.NewBitSight(secrets.BitsightAPIKey))
+		srcs = append(srcs, cached(sources.NewBitSight(secrets.BitsightAPIKey)))
 	}
 	if cfg.Sources[sources.SourceNVD] {
 		// The key is optional — it raises NVD's rate limit rather than granting access —
 		// so NVD is registered whether or not one is present.
-		srcs = append(srcs, sources.NewNVD(secrets.NVDAPIKey,
-			sources.WithNVDResultsPerCPE(cfg.NVD.ResultsPerCPE)))
+		srcs = append(srcs, cached(sources.NewNVD(secrets.NVDAPIKey,
+			sources.WithNVDResultsPerCPE(cfg.NVD.ResultsPerCPE))))
 	}
 	if cfg.Sources[sources.SourceOSV] {
 		// OSV is free and unauthenticated.
-		srcs = append(srcs, sources.NewOSV())
+		srcs = append(srcs, cached(sources.NewOSV()))
 	}
 	if cfg.Sources[sources.SourceFedRAMP] {
 		// A public listing, read passively. No credential.
-		srcs = append(srcs, sources.NewFedRAMP())
+		srcs = append(srcs, cached(sources.NewFedRAMP()))
 	}
 	if cfg.Sources[sources.SourceCAAG] {
-		srcs = append(srcs, sources.NewCAAG())
+		srcs = append(srcs, cached(sources.NewCAAG()))
 	}
 	if cfg.Sources[sources.SourceResearch] {
 		// The second LLM job, and the only one that runs inside the fan-out. It skips
 		// itself when the key is absent rather than failing the assessment.
-		srcs = append(srcs, sources.NewResearcher(secrets.AnthropicAPIKey, cfg.Models.Research))
+		srcs = append(srcs, cached(
+			sources.NewResearcher(secrets.AnthropicAPIKey, cfg.Models.Research)))
 	}
+	// Manual sources are never wrapped. They are analyst data read fresh from their own row
+	// every run, and they never expire (spec §7).
+	//
 	// Manual sources are not toggled by cfg.Sources: they are checklist categories that
 	// must appear in every report, answered or not, so that a category an analyst has yet
 	// to check never silently drops off the assessment (spec §3, §7).
@@ -401,8 +423,23 @@ func registerSources(cfg *config.Config, secrets *config.Secrets, st *store.Stor
 	return srcs
 }
 
+// warnCache reports cache trouble without failing anything.
+//
+// A cache that has quietly stopped working looks exactly like one that is working — the
+// assessment is simply slower and nobody knows why. This goes to stderr so it stays out of
+// the report while still being impossible to miss.
+func warnCache(err error) {
+	fmt.Fprintf(os.Stderr, "vrm: cache: %v\n", err)
+}
+
 func printSection(s sources.Section) {
-	fmt.Printf("  %-14s %s\n", s.Source, s.Status)
+	status := string(s.Status)
+	if s.Cached {
+		// The marker only. Spec §11 makes fetched_at internal bookkeeping and says not to
+		// surface it as report content, so the age is not shown alongside it.
+		status += " (cached)"
+	}
+	fmt.Printf("  %-14s %s\n", s.Source, status)
 	switch s.Status {
 	case sources.StatusOK:
 		if r, ok := s.Data.(sources.BitSightRating); ok {

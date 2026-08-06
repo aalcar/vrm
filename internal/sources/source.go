@@ -94,6 +94,18 @@ type Section struct {
 	Citations []Citation
 	Note      string // why skipped, or the manual-check instruction + URL
 	Err       string // set when Status == StatusFailed
+
+	// Cached reports that this section came from the cache rather than from a live call.
+	//
+	// It travels on the Section rather than in a map the caching layer writes to, because
+	// the fan-out is concurrent and a shared map would be a data race. It is never
+	// persisted: it describes how this run obtained the section, not anything about the
+	// vendor, and a stored true would make every later read claim to be a cache hit of
+	// itself.
+	//
+	// Deliberately a bare flag, with no fetched_at alongside it. Spec §11 makes that
+	// timestamp internal bookkeeping and says not to surface it as report content.
+	Cached bool
 }
 
 // Source is one data provider. Implementations must be safe for concurrent use and must
