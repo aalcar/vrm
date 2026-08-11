@@ -337,6 +337,13 @@ func (s *Store) CachedResolution(
 		return sources.Resolution{}, false, fmt.Errorf(
 			"cached resolution has no canonical name; re-resolving")
 	}
+	// Read enforces the same rule as write, so a row stored before that rule existed — or by
+	// a caller that skipped the check — expires on first read instead of outliving it. A
+	// plain miss, not an error: an uncacheable resolution should never have been here, and
+	// warning about it on every run for a vendor that genuinely has no CPE is noise.
+	if !res.Cacheable() {
+		return sources.Resolution{}, false, nil
+	}
 	return res, true, nil
 }
 
@@ -347,6 +354,15 @@ func (s *Store) CachedResolution(
 func (s *Store) PutResolution(ctx context.Context, company, service string, res sources.Resolution) error {
 	if res.Entity.CanonicalName == "" {
 		return errors.New("refusing to cache a resolution with no canonical name")
+	}
+	// A backstop, not the primary check — callers are expected to consult Cacheable before
+	// getting here. It errors rather than skipping quietly so a caller that forgets says so
+	// out loud instead of appearing to cache and silently not.
+	if !res.Cacheable() {
+		return errors.New(
+			"refusing to cache a resolution with no CPEs: an empty list cannot be told apart " +
+				"from a run where the model returned nothing, and caching it would skip NVD " +
+				"for the full TTL")
 	}
 
 	payload, err := json.Marshal(res)

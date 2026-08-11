@@ -388,3 +388,51 @@ func TestParseResolutionValidatesPackages(t *testing.T) {
 		t.Errorf("Dropped = %v, want both bad entries reported", res.Dropped)
 	}
 }
+
+func TestResolutionCacheability(t *testing.T) {
+	full := Resolution{Entity: ResolvedEntity{
+		CanonicalName: "Okta, Inc.",
+		Domains:       []string{"okta.com"},
+		CPEs:          []string{"cpe:2.3:a:okta:okta:*:*:*:*:*:*:*:*"},
+	}}
+
+	noCPEs := full
+	noCPEs.Entity.CPEs = nil
+
+	emptyCPEs := full
+	emptyCPEs.Entity.CPEs = []string{}
+
+	noName := full
+	noName.Entity.CanonicalName = ""
+
+	cases := []struct {
+		name string
+		res  Resolution
+		want bool
+	}{
+		{"a full mapping", full, true},
+		{"nil CPEs", noCPEs, false},
+		{"empty CPE slice", emptyCPEs, false},
+		{"no canonical name", noName, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.res.Cacheable(); got != tc.want {
+				t.Errorf("Cacheable() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Domains and packages alone are not enough. They keep BitSight and OSV working, which is
+// exactly why an analyst would not notice that NVD had gone quiet for the rest of the TTL.
+func TestAResolutionThatOnlyFeedsTheOtherSourcesIsNotCacheable(t *testing.T) {
+	res := Resolution{Entity: ResolvedEntity{
+		CanonicalName: "Okta, Inc.",
+		Domains:       []string{"okta.com"},
+		Packages:      []Package{{Ecosystem: "npm", Name: "@okta/okta-auth-js"}},
+	}}
+	if res.Cacheable() {
+		t.Error("cached a resolution NVD cannot use")
+	}
+}

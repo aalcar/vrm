@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -344,6 +345,56 @@ func TestResolutionWithoutACanonicalNameIsRefused(t *testing.T) {
 		sources.Resolution{Entity: sources.ResolvedEntity{Domains: []string{"okta.com"}}})
 	if err == nil {
 		t.Fatal("cached a resolution with no canonical name")
+	}
+}
+
+func TestResolutionWithoutCPEsIsRefused(t *testing.T) {
+	st := testStore(t)
+	company, service := uniqueQuery(t, st)
+
+	res := resolutionFixture()
+	res.Entity.CPEs = nil
+
+	if err := st.PutResolution(context.Background(), company, service, res); err == nil {
+		t.Fatal("cached a resolution with no CPEs; NVD would skip for the full TTL")
+	}
+}
+
+// A row written before the no-CPE rule existed must not keep being served under it. The
+// rule is enforced on read as well as write, so the stale row expires on first read rather
+// than outliving the fix by the remainder of a 720h TTL.
+func TestACachedResolutionWithoutCPEsIsAMiss(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	company, service := uniqueQuery(t, st)
+
+	res := resolutionFixture()
+	res.Entity.CPEs = nil
+	writeResolutionDirectly(t, st, company, service, res)
+
+	got, hit, err := st.CachedResolution(ctx, company, service, time.Hour)
+	if err != nil {
+		t.Fatalf("a stale uncacheable row should read as a plain miss, got error: %v", err)
+	}
+	if hit {
+		t.Fatalf("served a cached resolution with no CPEs: %+v", got.Entity)
+	}
+}
+
+// writeResolutionDirectly bypasses PutResolution's guards to plant a row that the current
+// rules would refuse to write, which is the only way to test reading one.
+func writeResolutionDirectly(t *testing.T, st *Store, company, service string, res sources.Resolution) {
+	t.Helper()
+	payload, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshal resolution: %v", err)
+	}
+	_, err = st.pool.Exec(context.Background(),
+		`INSERT INTO assessments_cache (company, service, source, section, fetched_at, manual)
+		 VALUES ($1, $2, $3, $4, now(), false)`,
+		NormalizeKey(company), NormalizeKey(service), sources.ResolutionKey, payload)
+	if err != nil {
+		t.Fatalf("plant resolution row: %v", err)
 	}
 }
 

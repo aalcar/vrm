@@ -250,7 +250,7 @@ func resolve(
 		return res, false, err
 	}
 
-	if cacheable {
+	if cacheable && res.Cacheable() {
 		// Its own context, for the same reason a source's cache write gets one: the answer
 		// is already in hand and must not be lost to the clock that bounded obtaining it.
 		writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), cacheWriteTimeout)

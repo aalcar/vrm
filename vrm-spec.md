@@ -452,7 +452,10 @@ cache_ttl:
 
 - `--no-cache` forces fresh automated calls. It **must not** delete or bypass manual
   entries (`manual = true` rows).
-- Cache entity resolution too, keyed on company+service.
+- Cache entity resolution too, keyed on company+service — **except when it resolved no
+  CPEs.** An empty CPE list cannot be told apart from a run where the model returned nothing,
+  and pinning it skips NVD for the full 720h. Enforced on read as well as write, so a row
+  stored before the rule expires on first read rather than outliving it (§15).
 
 ---
 

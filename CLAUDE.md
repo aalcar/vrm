@@ -98,6 +98,14 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   vendor; caching one pins an upstream blip for the whole TTL — 168h for FedRAMP — and an
   analyst cannot tell a cached failure from a live one. A skip is worse: it is derived from
   the resolved entity, so it would outlive the resolution fix meant to clear it.
+- **A resolution with no CPEs is never cached, on read or write.** Resolution has no error to
+  gate on, so the gate is the identifier NVD needs. An empty CPE list is the one output that
+  cannot be interpreted — correct for a vendor with no CPE, a bad sample for one that has
+  them — and the same prompt has returned `(none)` on one call and a CPE on the next, twice
+  in four consecutive runs. Caching the empty one skips NVD for 720h under a heading that
+  reads like an answer. The check runs on read too, so rows written before it existed expire
+  on first read instead of outliving the fix. Cost: vendors that genuinely have no CPE
+  re-resolve every run. That is the trade, and it is deliberate.
 - **A cached `Section.Data` must come back as its concrete type.** `json.Unmarshal` into an
   `any` yields a `map`, the renderer's type switch matches no case, and the section renders as
   a green heading with nothing under it. Decoding is table-driven per source and encoding is

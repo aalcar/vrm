@@ -161,6 +161,23 @@ type Resolution struct {
 	Dropped []string
 }
 
+// Cacheable reports whether this resolution is worth pinning for its TTL.
+//
+// An empty CPE list is the one output that cannot be interpreted. For a vendor with no CPE
+// it is correct; for a vendor that has one it means the model returned nothing this run —
+// and the same prompt has produced CPEs on one call and none on the next. Nothing in the
+// stored value distinguishes the two, so caching it would serve the worse reading for the
+// full 720h while NVD skips every run and the report shows no CVE section at all.
+//
+// This is the rule automated sections already follow: only a successful result is cached,
+// because caching a blip pins it for the whole TTL. Resolution has no error to gate on, so
+// the gate is the identifier NVD actually needs. The cost is a re-resolution each run for
+// vendors that genuinely have no CPE — one short LLM call, paid to keep a bad sample from
+// becoming a month-long answer.
+func (r Resolution) Cacheable() bool {
+	return r.Entity.CanonicalName != "" && len(r.Entity.CPEs) > 0
+}
+
 // Resolve maps a query to machine identifiers.
 //
 // A malformed or unusable reply is an error, never a partially populated entity — a
