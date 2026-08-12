@@ -401,3 +401,76 @@ func TestReportCollectsTheCacheFlags(t *testing.T) {
 		t.Error("a live section left an entry in Cached")
 	}
 }
+
+// nvdSection builds an NVD section carrying one query with the given verification.
+//
+// The failed shape here — a Failed section that still carries its NVDResult — mirrors what
+// nvd.go actually returns for an all-invented CPE set, and TestFetchNVDDistinguishesCleanFromInvented
+// is what holds it to that. This fixture asserted the shape before the source produced it,
+// and the gate below passed against a section the real source never returned.
+func nvdSection(status sources.Status, v sources.NVDVerification) sources.Section {
+	res := sources.NVDResult{Queries: []sources.NVDQuery{{
+		CPE:          "cpe:2.3:a:okta:okta:*:*:*:*:*:*:*:*",
+		Verification: v,
+	}}}
+	if status == sources.StatusFailed {
+		s := sources.Failed(sources.SourceNVD, errNVDExample)
+		s.Data = res
+		return s
+	}
+	return sources.OK(sources.SourceNVD, res)
+}
+
+var errNVDExample = errors.New("none of the resolved CPEs exist in NVD's CPE dictionary")
+
+func TestCPEsVerified(t *testing.T) {
+	cases := []struct {
+		name            string
+		sections        []sources.Section
+		verified, known bool
+	}{
+		{
+			name:     "a CPE with CVEs is confirmed",
+			sections: []sources.Section{nvdSection(sources.StatusOK, sources.NVDVerifiedByResults)},
+			verified: true, known: true,
+		},
+		{
+			// The whole point of the dictionary check: no CVEs but a real product.
+			name:     "a clean CPE in the dictionary is confirmed",
+			sections: []sources.Section{nvdSection(sources.StatusOK, sources.NVDVerifiedInDictionary)},
+			verified: true, known: true,
+		},
+		{
+			name:     "an invented CPE is a verdict, not an absence of one",
+			sections: []sources.Section{nvdSection(sources.StatusFailed, sources.NVDUnverified)},
+			verified: false, known: true,
+		},
+		{
+			// A transport failure carries no NVDResult. It must not read as "invented".
+			name:     "NVD failing before it could look is no verdict",
+			sections: []sources.Section{sources.Failed(sources.SourceNVD, errNVDExample)},
+			verified: false, known: false,
+		},
+		{
+			name:     "NVD skipped is no verdict",
+			sections: []sources.Section{sources.Skipped(sources.SourceNVD, "no CPEs resolved")},
+			verified: false, known: false,
+		},
+		{
+			name:     "NVD disabled is no verdict",
+			sections: []sources.Section{sources.OK(sources.SourceBitSight, sources.BitSightRating{})},
+			verified: false, known: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &Report{Sections: tc.sections}
+			verified, known := r.CPEsVerified()
+			if verified != tc.verified || known != tc.known {
+				t.Errorf("CPEsVerified() = (%v, %v), want (%v, %v)",
+					verified, known, tc.verified, tc.known)
+			}
+		})
+	}
+}

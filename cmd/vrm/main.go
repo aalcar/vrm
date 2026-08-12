@@ -187,6 +187,11 @@ func runAssess(ctx context.Context, args []string) error {
 		assess.WithSourceTimeout(sources.SourceResearch, cfg.Timeouts.Research.Duration())).
 		Run(ctx, q, ent)
 
+	// After the fan-out, not before: caching the mapping is gated on what NVD made of it.
+	if !resolutionCached {
+		recordResolution(ctx, cfg, st, q, resolution, report, cpesOverridden)
+	}
+
 	fmt.Printf("query\n")
 	fmt.Printf("  company:   %s\n", q.Company)
 	fmt.Printf("  service:   %s\n", q.Service)
@@ -250,17 +255,48 @@ func resolve(
 		return res, false, err
 	}
 
-	if cacheable && res.Cacheable() {
-		// Its own context, for the same reason a source's cache write gets one: the answer
-		// is already in hand and must not be lost to the clock that bounded obtaining it.
-		writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), cacheWriteTimeout)
-		defer cancelWrite()
-
-		if err := st.PutResolution(writeCtx, q.Company, q.Service, res); err != nil {
-			warnCache(fmt.Errorf("resolution: %w", err))
-		}
-	}
 	return res, false, nil
+}
+
+// recordResolution caches a freshly resolved entity, but only once NVD has had its say.
+//
+// The write waits for the fan-out because the question "are these CPEs real" is answered by
+// the source that consumes them, and that answer only exists after it has run. Resolving and
+// caching in one step would pin the mapping before anything had checked it — which is how a
+// CPE the model invented ends up as the assessment's answer for the next 720h.
+func recordResolution(
+	ctx context.Context,
+	cfg *config.Config,
+	st *store.Store,
+	q sources.Query,
+	res sources.Resolution,
+	report *assess.Report,
+	cpesOverridden bool,
+) {
+	if _, cacheable := cfg.TTL(sources.ResolutionKey); !cacheable {
+		return
+	}
+	// The verdict below belongs to the analyst's CPEs, not the model's. Letting an override
+	// earn the model's mapping a place in the cache would cache a mapping nothing checked.
+	if cpesOverridden || !res.Cacheable() {
+		return
+	}
+	// A verdict of "invented" is the one answer that blocks the write. No verdict — NVD
+	// disabled, or unable to answer this run — falls back to the presence rule: an
+	// unvalidated CPE that turns out wrong produces a loud failed section on every later
+	// run, where an absent one produced a silent skip.
+	if verified, known := report.CPEsVerified(); known && !verified {
+		return
+	}
+
+	// Its own context, for the same reason a source's cache write gets one: the answer is
+	// already in hand and must not be lost to the clock that bounded obtaining it.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cacheWriteTimeout)
+	defer cancel()
+
+	if err := st.PutResolution(writeCtx, q.Company, q.Service, res); err != nil {
+		warnCache(fmt.Errorf("resolution: %w", err))
+	}
 }
 
 // printEntity surfaces the resolved entity before any results derived from it.

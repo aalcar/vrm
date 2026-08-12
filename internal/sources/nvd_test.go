@@ -410,6 +410,16 @@ func TestFetchNVDDistinguishesCleanFromInvented(t *testing.T) {
 			}
 
 			if tt.wantStatus == StatusFailed {
+				// The verdict travels on the section, not only in the prose. Without it a
+				// caller cannot tell "NVD judged these fictional" from "NVD never answered",
+				// and the resolution cache pins an invented CPE for 720h on the difference.
+				res, ok := sec.Data.(NVDResult)
+				if !ok {
+					t.Fatalf("failed section carries no NVDResult (Data = %T)", sec.Data)
+				}
+				if res.AnyVerified() {
+					t.Error("AnyVerified() on an all-invented result")
+				}
 				// The error must point at entity resolution and name the real products,
 				// so the analyst can correct it rather than merely distrust it.
 				if !strings.Contains(sec.Err, "cpe:2.3:a:okta:okta") {
@@ -418,8 +428,13 @@ func TestFetchNVDDistinguishesCleanFromInvented(t *testing.T) {
 				if !strings.Contains(sec.Err, "access_gateway") {
 					t.Errorf("error does not name NVD's real products: %s", sec.Err)
 				}
-				if sec.Data != nil {
-					t.Error("a failed section must carry no data")
+				// A failed section still carries no *answer*. The result attached above is
+				// verdicts only — no CVE list and no total — so there is nothing
+				// answer-shaped for a caller to mistake for a clean vendor. The renderer
+				// reads Data on StatusOK alone, and only OK sections are ever cached.
+				if res.TotalCVEs != 0 || len(res.CVEs) != 0 {
+					t.Errorf("failed section carries an answer: TotalCVEs=%d CVEs=%d",
+						res.TotalCVEs, len(res.CVEs))
 				}
 				return
 			}
@@ -706,4 +721,32 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestNVDResultAnyVerified(t *testing.T) {
+	cases := []struct {
+		name  string
+		verds []NVDVerification
+		want  bool
+	}{
+		{"no queries at all", nil, false},
+		{"every CPE invented", []NVDVerification{NVDUnverified, NVDUnverified}, false},
+		{"one confirmed by CVEs", []NVDVerification{NVDVerifiedByResults}, true},
+		{"one confirmed by the dictionary", []NVDVerification{NVDVerifiedInDictionary}, true},
+		// A mapping can be good enough to cache while still carrying an invented entry.
+		// NVD names that entry loudly on every run, which is the correction path.
+		{"mixed", []NVDVerification{NVDUnverified, NVDVerifiedInDictionary}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var res NVDResult
+			for _, v := range tc.verds {
+				res.Queries = append(res.Queries, NVDQuery{Verification: v})
+			}
+			if got := res.AnyVerified(); got != tc.want {
+				t.Errorf("AnyVerified() = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }

@@ -452,10 +452,13 @@ cache_ttl:
 
 - `--no-cache` forces fresh automated calls. It **must not** delete or bypass manual
   entries (`manual = true` rows).
-- Cache entity resolution too, keyed on company+service — **except when it resolved no
-  CPEs.** An empty CPE list cannot be told apart from a run where the model returned nothing,
-  and pinning it skips NVD for the full 720h. Enforced on read as well as write, so a row
-  stored before the rule expires on first read rather than outliving it (§15).
+- Cache entity resolution too, keyed on company+service — but **only once NVD has judged its
+  CPEs**, which means the write happens after the fan-out, not inside resolution. A mapping
+  with no CPEs is never cached (an empty list cannot be told apart from a run where the model
+  returned nothing, and pinning it skips NVD for the full 720h; enforced on read as well as
+  write, so rows predating the rule expire on first read). A mapping whose CPEs NVD found
+  fictional is never cached either. No verdict — NVD disabled or unable to answer — falls back
+  to the presence rule. A `--cpe` override never earns the model's mapping a cache entry (§15).
 
 ---
 

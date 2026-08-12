@@ -242,7 +242,13 @@ func (n *NVD) Fetch(ctx context.Context, q Query, ent ResolvedEntity) (Section, 
 	// Every CPE we managed to query was fictional, so there is no trustworthy answer here.
 	// Reporting "0 CVEs" would be the silently-wrong output spec §15 warns about.
 	if len(result.Queries) > 0 && allUnverified(result.Queries) {
-		return Failed(n.Name(), unverifiedError(result.Queries)), nil
+		// The queries travel with the failure. The renderer only reads Data on an OK section,
+		// so this changes nothing an analyst sees, but it is the difference between "NVD
+		// judged these CPEs fictional" and "NVD never got far enough to judge" — and the
+		// resolution cache has to tell those apart before it pins the mapping for 720h.
+		section := Failed(n.Name(), unverifiedError(result.Queries))
+		section.Data = result
+		return section, nil
 	}
 
 	sortVulns(result.CVEs)
@@ -485,6 +491,23 @@ func vendorMatchString(match string) string {
 		return ""
 	}
 	return strings.Join(parts[:4], ":")
+}
+
+// AnyVerified reports whether NVD confirmed at least one of the CPEs it was given, either
+// by returning CVEs for it or by listing it in the dictionary.
+//
+// This is the authoritative answer to "did resolution invent these identifiers", and it is
+// a by-product of work the fan-out already did — checking it costs no extra request. What
+// it does not report is whether the *unverified* CPEs were pruned: a mapping can be
+// confirmed here while still carrying invented entries alongside, which NVD names loudly on
+// every run.
+func (r NVDResult) AnyVerified() bool {
+	for _, q := range r.Queries {
+		if q.Verification != NVDUnverified {
+			return true
+		}
+	}
+	return false
 }
 
 func allUnverified(queries []NVDQuery) bool {

@@ -50,6 +50,29 @@ type Report struct {
 	Cached   map[string]bool
 }
 
+// CPEsVerified reports NVD's verdict on the CPEs entity resolution produced: whether it
+// confirmed at least one, and whether it reached a verdict at all.
+//
+// NVD is the consumer of those identifiers, so its answer is the authoritative one — the
+// alternative, re-checking the dictionary during resolution, would duplicate this logic and
+// pay a second round of requests for a worse version of the same answer.
+//
+// known is false when NVD is disabled, skipped, or failed before it could look anything up.
+// Those are absences of a verdict, not a negative one, and must not be read as either.
+func (r *Report) CPEsVerified() (verified, known bool) {
+	for _, s := range r.Sections {
+		if s.Source != sources.SourceNVD {
+			continue
+		}
+		res, ok := s.Data.(sources.NVDResult)
+		if !ok || len(res.Queries) == 0 {
+			return false, false
+		}
+		return res.AnyVerified(), true
+	}
+	return false, false
+}
+
 // Assessor runs a fixed set of sources.
 type Assessor struct {
 	sources          []sources.Source

@@ -98,14 +98,23 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   vendor; caching one pins an upstream blip for the whole TTL — 168h for FedRAMP — and an
   analyst cannot tell a cached failure from a live one. A skip is worse: it is derived from
   the resolved entity, so it would outlive the resolution fix meant to clear it.
-- **A resolution with no CPEs is never cached, on read or write.** Resolution has no error to
-  gate on, so the gate is the identifier NVD needs. An empty CPE list is the one output that
-  cannot be interpreted — correct for a vendor with no CPE, a bad sample for one that has
-  them — and the same prompt has returned `(none)` on one call and a CPE on the next, twice
-  in four consecutive runs. Caching the empty one skips NVD for 720h under a heading that
-  reads like an answer. The check runs on read too, so rows written before it existed expire
-  on first read instead of outliving the fix. Cost: vendors that genuinely have no CPE
-  re-resolve every run. That is the trade, and it is deliberate.
+- **A resolution is cached only after NVD has judged its CPEs.** Resolution has no error to
+  gate on, so the gate is the identifier NVD consumes — and the verdict only exists after the
+  fan-out, which is why the write waits for it rather than happening inside `resolve`. Two
+  rules, both load-bearing:
+  - **No CPEs at all is never cached**, on read or write. An empty list cannot be
+    interpreted: correct for a vendor with no CPE, a bad sample for one that has them. The
+    same prompt returned `(none)` four times and a CPE twice across six consecutive Okta runs.
+    Read-side enforcement means rows written before this rule expire on first read.
+  - **CPEs NVD calls fictional are never cached.** `Report.CPEsVerified` reads the verdict off
+    the NVD section. *No* verdict — NVD disabled, or it failed before it could look — falls
+    back to the presence rule, because an unvalidated CPE that turns out wrong produces a loud
+    failed section every run, where an absent one produced a silent skip.
+
+  A `--cpe` override never earns the model's mapping a cache entry: the verdict belongs to the
+  analyst's identifiers, not the model's. Cost: a vendor the model cannot resolve to a real CPE
+  re-resolves on every run, forever. Okta/SSO is exactly that vendor today. The fix is
+  `--cpe`, not a weaker gate.
 - **A cached `Section.Data` must come back as its concrete type.** `json.Unmarshal` into an
   `any` yields a `map`, the renderer's type switch matches no case, and the section renders as
   a green heading with nothing under it. Decoding is table-driven per source and encoding is
