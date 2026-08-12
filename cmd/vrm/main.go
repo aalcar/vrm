@@ -156,7 +156,12 @@ func runAssess(ctx context.Context, args []string) error {
 
 	q := sources.Query{Company: company, Service: *service}
 
-	resolution, resolutionCached, err := resolve(ctx, cfg, secrets, st, q, *noCache)
+	// One NVD, used twice: entity resolution reads its CPE dictionary, then the fan-out
+	// queries it for CVEs. They must be the same instance — the rate limiter lives on it, and
+	// two limiters sharing NVD's five-requests-per-thirty-seconds budget would earn a 403.
+	nvd := newNVD(cfg, secrets)
+
+	resolution, resolutionCached, err := resolve(ctx, cfg, secrets, st, q, *noCache, nvd)
 	if err != nil {
 		// Fatal, unlike a source failure. Every deterministic source keys off the resolved
 		// entity, so continuing would produce a report in which everything skipped — and
@@ -183,7 +188,7 @@ func runAssess(ctx context.Context, args []string) error {
 		ent.CPEs = cpes
 	}
 
-	report := assess.New(registerSources(cfg, secrets, st, *noCache), cfg.Timeouts.PerSource.Duration(),
+	report := assess.New(registerSources(cfg, secrets, st, *noCache, nvd), cfg.Timeouts.PerSource.Duration(),
 		assess.WithSourceTimeout(sources.SourceResearch, cfg.Timeouts.Research.Duration())).
 		Run(ctx, q, ent)
 
@@ -198,7 +203,7 @@ func runAssess(ctx context.Context, args []string) error {
 	fmt.Printf("  cache key: %s / %s\n",
 		store.NormalizeKey(q.Company), store.NormalizeKey(q.Service))
 
-	printEntity(ent, resolution.Dropped, overridden, cpesOverridden, resolutionCached)
+	printEntity(ent, resolution, overridden, cpesOverridden, resolutionCached)
 
 	fmt.Printf("\nconfig %s\n", *configPath)
 	fmt.Printf("  models:    resolution=%s research=%s\n",
@@ -231,6 +236,7 @@ func resolve(
 	st *store.Store,
 	q sources.Query,
 	noCache bool,
+	nvd *sources.NVD,
 ) (sources.Resolution, bool, error) {
 	ttl, cacheable := cfg.TTL(sources.ResolutionKey)
 
@@ -245,9 +251,15 @@ func resolve(
 		}
 	}
 
-	resolver := sources.NewResolver(secrets.AnthropicAPIKey, cfg.Models.Resolution)
+	opts := []sources.ResolverOption{}
+	if nvd != nil {
+		// A typed nil would satisfy the interface and panic on first use, so the check is on
+		// the concrete pointer and the option is only added when there is something behind it.
+		opts = append(opts, sources.WithCPEDirectory(nvd))
+	}
+	resolver := sources.NewResolver(secrets.AnthropicAPIKey, cfg.Models.Resolution, opts...)
 
-	resCtx, cancel := context.WithTimeout(ctx, cfg.Timeouts.PerSource.Duration())
+	resCtx, cancel := context.WithTimeout(ctx, cfg.Timeouts.ResolutionTimeout())
 	defer cancel()
 
 	res, err := resolver.Resolve(resCtx, q)
@@ -306,7 +318,7 @@ func recordResolution(
 // is what lets an analyst catch that before acting on it (spec §15).
 func printEntity(
 	ent sources.ResolvedEntity,
-	dropped []string,
+	res sources.Resolution,
 	domainOverridden, cpesOverridden, cached bool,
 ) {
 	fmt.Printf("\nresolved entity\n")
@@ -326,12 +338,18 @@ func printEntity(
 		fmt.Printf("   (overridden by --cpe)")
 	}
 	fmt.Println()
+	// How the CPEs were arrived at, printed under them. A CPE NVD's dictionary confirmed and
+	// one nothing checked look identical on the line above, and they are not the same claim.
+	// An override supersedes it: what the model proposed is no longer what will be queried.
+	if res.CPEOrigin != "" && !cpesOverridden {
+		fmt.Printf("             %s\n", res.CPEOrigin)
+	}
 	fmt.Printf("  packages:  %s\n", orNone(packageNames(ent.Packages)))
 	fmt.Printf("  aliases:   %s\n", orNone(ent.Aliases))
 
 	// A silently discarded identifier is indistinguishable from a vendor that genuinely
 	// has none, so say what was thrown out and why.
-	for _, d := range dropped {
+	for _, d := range res.Dropped {
 		fmt.Printf("  dropped:   %s\n", d)
 	}
 }
@@ -449,11 +467,26 @@ func manualNames(cfg *config.Config) []string {
 	return names
 }
 
+// newNVD builds the single NVD instance for this run, or nil when the source is switched off.
+//
+// Nil rather than an unused instance: with nvd disabled there is nothing to query and nothing
+// to check CPEs against, and resolution must be told that rather than handed a client whose
+// answers would never be read.
+func newNVD(cfg *config.Config, secrets *config.Secrets) *sources.NVD {
+	if !cfg.Sources[sources.SourceNVD] {
+		return nil
+	}
+	// The key is optional — it raises NVD's rate limit rather than granting access — so NVD
+	// is built whether or not one is present.
+	return sources.NewNVD(secrets.NVDAPIKey, sources.WithNVDResultsPerCPE(cfg.NVD.ResultsPerCPE))
+}
+
 func registerSources(
 	cfg *config.Config,
 	secrets *config.Secrets,
 	st *store.Store,
 	noCache bool,
+	nvd *sources.NVD,
 ) []sources.Source {
 	// cached wraps an automated source in its configured TTL. A source with no cache_ttl
 	// entry comes back unwrapped, so an omitted line means "do not cache" rather than
@@ -472,11 +505,10 @@ func registerSources(
 	if cfg.Sources[sources.SourceBitSight] {
 		srcs = append(srcs, cached(sources.NewBitSight(secrets.BitsightAPIKey)))
 	}
-	if cfg.Sources[sources.SourceNVD] {
-		// The key is optional — it raises NVD's rate limit rather than granting access —
-		// so NVD is registered whether or not one is present.
-		srcs = append(srcs, cached(sources.NewNVD(secrets.NVDAPIKey,
-			sources.WithNVDResultsPerCPE(cfg.NVD.ResultsPerCPE))))
+	if nvd != nil {
+		// Built by newNVD and already handed to entity resolution, so both uses share one
+		// rate limiter. cfg.Sources decided whether it exists at all.
+		srcs = append(srcs, cached(nvd))
 	}
 	if cfg.Sources[sources.SourceOSV] {
 		// OSV is free and unauthenticated.

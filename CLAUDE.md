@@ -50,7 +50,16 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   summarize, or recompute them.
 - **Two LLM jobs, kept separate.** Entity resolution (strict JSON) and checklist research
   (fixed fields + citations) are different functions with different prompts and output
-  contracts. Never merge them into one call.
+  contracts. Never merge them into one call. Resolution is one job made of *two* calls —
+  propose, then select from NVD's catalogue — which is a sequence inside one contract, not a
+  third job. Merging either of its calls into research is the thing this forbids.
+- **The model never writes a CPE product token.** It proposes a vendor; NVD's CPE dictionary
+  supplies the products; the model chooses from that list and every choice is checked for
+  membership. This is not a prompt problem that better wording fixes — the same prompt
+  returned no CPE four times and an invented one twice across six consecutive Okta runs. The
+  catalogue is a hard ceiling on what can be queried, and a token outside it is dropped as
+  invented and reported. Do not let a product token reach `Entity.CPEs` by any other route.
+  A truncated or narrowed catalogue must say so: it makes "nothing matched" a weaker claim.
 - **Tri-state, never bare `no`.** Research answers are `yes` (with citation),
   `no_evidence_found`, or `not_applicable`. "No evidence found" and "did not happen" are
   different claims and only the first is supportable.
@@ -58,10 +67,13 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   `200 / totalResults 0` both for a clean vendor and for a CPE that does not exist, so a
   zero only means something once the CPE is confirmed against the CPE dictionary. Never let
   an unverifiable zero render as a clean result.
-- **Identifiers are validated against whatever will consume them.** A CPE gets a structural
-  check and a dictionary check; a package ecosystem is checked against OSV's registry list.
-  Anything that fails is dropped *and reported* — a silently discarded identifier looks
-  exactly like a vendor that has none.
+- **Identifiers are validated against whatever will consume them.** A CPE is now *sourced*
+  from the consumer — NVD's dictionary — rather than validated after the fact; a package
+  ecosystem is checked against OSV's registry list. Anything that fails is dropped *and
+  reported* — a silently discarded identifier looks exactly like a vendor that has none. That
+  includes identifiers dropped by our own caps, which are a different fact from ones nothing
+  chose: a first pass at a 4-CPE selection limit silently cut two real Okta products on three
+  consecutive runs, and one of them carried the only HIGH-severity CVEs in the report.
 - **Find the authoritative record before writing a scraper.** The FedRAMP listing carries
   ~5,600 `{id,csp,cso,status,…}` literals that look exactly like the product catalogue.
   They are `leveraged_systems` dependency lists and their status is stale — Okta reads
@@ -80,9 +92,15 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   returning nothing is `StatusFailed`, the same way an unverified NVD zero and a FedRAMP
   parse below its floor are. A blank section under a green heading is the strongest claim
   the tool can make and the one it can least support.
-- **Set `effort` explicitly on both LLM calls.** The default is slower and answers fewer
-  fields; `medium` returned an empty checklist twice in five runs where `low` never did in
-  eighteen. Never leave it to an API default nobody chose.
+- **Set `effort` explicitly on every LLM call** — all three, counting resolution's product
+  selection. The default is slower and answers fewer fields; `medium` returned an empty
+  checklist twice in five runs where `low` never did in eighteen. Never leave it to an API
+  default nobody chose.
+- **One `*sources.NVD`, built in `main` and shared.** Entity resolution reads its CPE
+  dictionary and the fan-out queries it for CVEs. The rate limiter is a field on that struct,
+  so two instances mean two limiters splitting one 5-req/30s budget, and a 403 that looks
+  like a credential problem. `nvd: false` in config means resolution gets no directory and
+  labels its CPEs unchecked — never a second instance built to fill the gap.
 - **Uncited claims are dropped, not displayed.** A `yes` without a citation naming this
   specific vendor is downgraded to `no_evidence_found` by the parser.
 - **Partial failure is normal.** One source failing marks that section only. Never cancel
@@ -113,8 +131,12 @@ These come from the spec's guiding principles. Violating one is a bug even if te
 
   A `--cpe` override never earns the model's mapping a cache entry: the verdict belongs to the
   analyst's identifiers, not the model's. Cost: a vendor the model cannot resolve to a real CPE
-  re-resolves on every run, forever. Okta/SSO is exactly that vendor today. The fix is
-  `--cpe`, not a weaker gate.
+  re-resolves on every run, forever. The fix is `--cpe`, not a weaker gate.
+
+  This gate now fires far less often, because CPEs are chosen from NVD's catalogue rather than
+  composed — Okta/SSO was the standing example of a vendor that could never be cached, and it
+  caches six confirmed CPEs today. Keep the gate anyway. It is the backstop for the paths that
+  still produce unverified CPEs: `nvd: false`, and a dictionary that was unreachable.
 - **A cached `Section.Data` must come back as its concrete type.** `json.Unmarshal` into an
   `any` yields a `map`, the renderer's type switch matches no case, and the section renders as
   a green heading with nothing under it. Decoding is table-driven per source and encoding is

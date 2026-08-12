@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -21,6 +22,12 @@ import (
 //
 // Resist any refactor that merges them into one call. Deterministic values from the other
 // sources never pass through either prompt (spec §2.2).
+//
+// Resolution is one job made of two calls, not two jobs. The first generates identifiers;
+// the second, in resolve_cpe.go, picks a product out of a list NVD supplied. They are
+// sequenced parts of the same contract — company+service in, ResolvedEntity out — and the
+// split exists because generating a CPE product token and choosing one from an authoritative
+// list are different tasks with very different failure modes.
 
 // resolutionMaxTokens bounds the resolution reply. The output is a small JSON object; this
 // is headroom, not a target.
@@ -40,14 +47,19 @@ empty array for that field. An empty array is a correct and expected answer.
 - canonical_name: the company's full legal or commonly used corporate name.
 - domains: registrable domains the company owns, most authoritative first. Bare hostnames
   only — no scheme, no path, no port.
-- cpes: CPE 2.3 strings for the named service, in full 13-component form starting "cpe:2.3:".
-  Use the version-agnostic wildcard form unless a specific version was named.
-  The vendor and product tokens must be ones NVD has actually registered. NVD registers a
-  CPE per software product, not per company: the product token names a specific product,
-  and is almost never the company name repeated. For Okta the registered products are
-  tokens like okta:access_gateway and okta:verify — okta:okta is not a real CPE. If you do
-  not know the registered product token, return []. A fabricated CPE returns either another
-  vendor's CVEs or a silent zero, and neither looks wrong in the output.
+- cpe_vendors: the vendor tokens NVD registers this company's software under. This is the
+  fourth component of a CPE 2.3 string — usually the company name lowercased, with
+  underscores for spaces and no legal suffix: okta, atlassian, red_hat, hashicorp. Include
+  former, parent and acquired-brand spellings too, most likely first, since security data is
+  often still filed under them. You do not need to know which products exist; those are read
+  out of NVD's dictionary afterwards. Return [] only for a company that publishes no software.
+- cpes: full 13-component CPE 2.3 strings for the named service, and only where you are
+  confident NVD has registered that exact vendor AND product pair. These are a hint: every
+  one is checked against NVD's dictionary before anything is queried with it, and an
+  unregistered one is discarded. NVD registers a CPE per software product, not per company,
+  so the product token is almost never the company name repeated — for Okta the registered
+  products are tokens like access_gateway and verify, and okta:okta does not exist. Guessing
+  buys nothing here; [] is a good answer.
 - packages: open-source packages the company publishes, each as an object with "ecosystem"
   and "name". ecosystem is the registry the package is published to, spelled exactly as one
   of: npm, PyPI, Go, Maven, crates.io, RubyGems, NuGet, Packagist, Hex, Pub, CRAN,
@@ -72,11 +84,13 @@ var resolutionSchema = map[string]any{
 	"properties": map[string]any{
 		"canonical_name": map[string]any{"type": "string"},
 		"domains":        stringArraySchema,
+		"cpe_vendors":    stringArraySchema,
 		"cpes":           stringArraySchema,
 		"packages":       packageArraySchema,
 		"aliases":        stringArraySchema,
 	},
-	"required":             []string{"canonical_name", "domains", "cpes", "packages", "aliases"},
+	"required": []string{
+		"canonical_name", "domains", "cpe_vendors", "cpes", "packages", "aliases"},
 	"additionalProperties": false,
 }
 
@@ -110,36 +124,58 @@ type Resolver struct {
 	// apiKey is retained only so an error body echoing it can be redacted before the error
 	// reaches a rendered section. It is never logged and never sent anywhere but the client.
 	apiKey string
+	// dir is NVD's CPE dictionary, when one is available. Optional on purpose: NVD can be
+	// switched off in config, and resolution still has to produce domains and packages.
+	// Without it the model's CPEs are structurally validated and nothing more, which is
+	// what this tool did before the dictionary was consulted at all.
+	dir CPEDirectory
 }
 
 // ResolverOption configures a Resolver.
-type ResolverOption func(*[]option.RequestOption)
+type ResolverOption func(*resolverConfig)
+
+// resolverConfig accumulates options before the client is built, so an option can set a
+// field on the Resolver as easily as a request option on the SDK.
+type resolverConfig struct {
+	reqOpts []option.RequestOption
+	dir     CPEDirectory
+}
 
 // WithResolverBaseURL overrides the API host. Tests point this at an httptest.Server.
 func WithResolverBaseURL(u string) ResolverOption {
-	return func(opts *[]option.RequestOption) {
-		*opts = append(*opts, option.WithBaseURL(u))
+	return func(c *resolverConfig) {
+		c.reqOpts = append(c.reqOpts, option.WithBaseURL(u))
 	}
 }
 
 // WithResolverMaxRetries overrides the SDK's retry count. Tests set it to 0 so a failure
 // surfaces immediately instead of being retried.
 func WithResolverMaxRetries(n int) ResolverOption {
-	return func(opts *[]option.RequestOption) {
-		*opts = append(*opts, option.WithMaxRetries(n))
+	return func(c *resolverConfig) {
+		c.reqOpts = append(c.reqOpts, option.WithMaxRetries(n))
 	}
+}
+
+// WithCPEDirectory grounds CPE resolution in NVD's dictionary (see resolve_cpe.go).
+//
+// Pass the same *NVD the fan-out will use. Sharing the instance shares its rate limiter,
+// and two limiters against one five-requests-per-thirty-seconds budget is a 403 waiting to
+// happen.
+func WithCPEDirectory(d CPEDirectory) ResolverOption {
+	return func(c *resolverConfig) { c.dir = d }
 }
 
 // NewResolver builds a Resolver for the given model.
 func NewResolver(apiKey, model string, opts ...ResolverOption) *Resolver {
-	reqOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	cfg := resolverConfig{reqOpts: []option.RequestOption{option.WithAPIKey(apiKey)}}
 	for _, opt := range opts {
-		opt(&reqOpts)
+		opt(&cfg)
 	}
 	return &Resolver{
-		client: anthropic.NewClient(reqOpts...),
+		client: anthropic.NewClient(cfg.reqOpts...),
 		model:  model,
 		apiKey: apiKey,
+		dir:    cfg.dir,
 	}
 }
 
@@ -159,6 +195,19 @@ type Resolution struct {
 	// the report rather than discarded silently: a quietly dropped CPE looks identical to
 	// a vendor that genuinely has none.
 	Dropped []string
+	// CPEVendors are the candidate CPE vendor tokens the model proposed. They are an
+	// intermediate value, not an identifier any source consumes, and they are kept because
+	// they are what the dictionary lookup was keyed on: when no product is found, whether
+	// the vendor itself was registered is the difference between "wrong company name" and
+	// "this company registers no CPEs".
+	CPEVendors []string
+	// CPEOrigin says in one line how Entity.CPEs were arrived at — confirmed against NVD's
+	// dictionary, chosen from it, or never checked because NVD was unavailable.
+	//
+	// It exists because the CPEs are the weakest link (spec §15) and the three cases look
+	// identical in the report otherwise. A CPE nothing verified is a different claim from
+	// one NVD listed, and an analyst must be able to tell without reading the code.
+	CPEOrigin string
 }
 
 // Cacheable reports whether this resolution is worth pinning for its TTL.
@@ -183,7 +232,19 @@ func (r Resolution) Cacheable() bool {
 // A malformed or unusable reply is an error, never a partially populated entity — a
 // half-resolved entity would send the wrong identifiers to NVD and produce a confident,
 // wrong report (spec §15).
+//
+// Two steps: the model proposes, then — when a CPE directory is configured — NVD's dictionary
+// decides which CPEs actually exist. See groundCPEs.
 func (r *Resolver) Resolve(ctx context.Context, q Query) (Resolution, error) {
+	res, err := r.propose(ctx, q)
+	if err != nil {
+		return res, err
+	}
+	return r.groundCPEs(ctx, q, res), nil
+}
+
+// propose is the generative half: company + service in, candidate identifiers out.
+func (r *Resolver) propose(ctx context.Context, q Query) (Resolution, error) {
 	if strings.TrimSpace(q.Company) == "" {
 		return Resolution{}, errors.New("resolve: company is required")
 	}
@@ -242,6 +303,7 @@ func firstTextBlock(resp *anthropic.Message) (string, error) {
 type resolutionReply struct {
 	CanonicalName string   `json:"canonical_name"`
 	Domains       []string `json:"domains"`
+	CPEVendors    []string `json:"cpe_vendors"`
 	CPEs          []string `json:"cpes"`
 	Packages      []struct {
 		Ecosystem string `json:"ecosystem"`
@@ -287,6 +349,18 @@ func parseResolution(raw string) (Resolution, error) {
 		}
 		ent.CPEs = append(ent.CPEs, norm)
 	}
+	var vendors []string
+	for _, v := range reply.CPEVendors {
+		norm, ok := normalizeCPEVendor(v)
+		if !ok {
+			dropped = append(dropped, fmt.Sprintf(
+				"cpe vendor %q (not a bare CPE vendor token)", v))
+			continue
+		}
+		if !slices.Contains(vendors, norm) {
+			vendors = append(vendors, norm)
+		}
+	}
 	for _, p := range reply.Packages {
 		pkg, ok := normalizePackage(p.Ecosystem, p.Name)
 		if !ok {
@@ -303,7 +377,29 @@ func parseResolution(raw string) (Resolution, error) {
 		}
 	}
 
-	return Resolution{Entity: ent, Dropped: dropped}, nil
+	return Resolution{Entity: ent, Dropped: dropped, CPEVendors: vendors}, nil
+}
+
+// normalizeCPEVendor validates a bare CPE vendor token.
+//
+// Structural only, in the same spirit as normalizeCPE: whether the token is the one NVD
+// actually registers is not a question this can answer, and guessing at it is the failure
+// mode the dictionary lookup exists to close. What it does reject is a value that is not a
+// vendor token at all — a whole CPE string, a company name with spaces, a URL — because
+// those would be pasted into a match string and query something unintended.
+//
+// A dot is allowed through. It reads like a domain and a domain is the wrong answer, but
+// registered vendor tokens do contain dots, and a wrong-looking token that reaches the
+// dictionary is reported as unregistered, where a dropped one is reported as nothing.
+func normalizeCPEVendor(raw string) (string, bool) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" || v == "*" || v == "-" {
+		return "", false
+	}
+	if strings.ContainsAny(v, " \t\n:/\\?#@") {
+		return "", false
+	}
+	return v, true
 }
 
 // normalizeDomain accepts a bare registrable hostname and lowercases it.

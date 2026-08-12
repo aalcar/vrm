@@ -80,6 +80,21 @@ type Timeouts struct {
 	// would have to be raised to suit it and would stop bounding every other source.
 	// Zero means fall back to PerSource.
 	Research Duration `yaml:"research"`
+	// Resolution overrides PerSource for entity resolution, which is no longer a single
+	// call: it reads NVD's CPE dictionary between two model calls, and each dictionary
+	// request waits out NVD's six-second unkeyed courtesy interval. A per_source budget
+	// sized for one HTTP request would time it out and take the assessment with it, since a
+	// resolution failure is fatal where a source failure is not. Zero falls back to
+	// PerSource.
+	Resolution Duration `yaml:"resolution"`
+}
+
+// ResolutionTimeout returns the budget for entity resolution, falling back to PerSource.
+func (t Timeouts) ResolutionTimeout() time.Duration {
+	if t.Resolution > 0 {
+		return t.Resolution.Duration()
+	}
+	return t.PerSource.Duration()
 }
 
 // NVD holds NVD-specific query tuning.
@@ -195,6 +210,12 @@ func (c *Config) Validate() error {
 	if c.Timeouts.PerSource > 0 && c.Timeouts.Total > 0 && c.Timeouts.Total < c.Timeouts.PerSource {
 		errs = append(errs, fmt.Errorf("timeouts.total (%s) must be >= timeouts.per_source (%s)",
 			c.Timeouts.Total, c.Timeouts.PerSource))
+	}
+	// Resolution runs inside the total budget and everything else waits on it, so a
+	// resolution budget larger than the whole assessment can only ever be a mistake.
+	if c.Timeouts.Resolution > 0 && c.Timeouts.Total > 0 && c.Timeouts.Total < c.Timeouts.Resolution {
+		errs = append(errs, fmt.Errorf("timeouts.total (%s) must be >= timeouts.resolution (%s)",
+			c.Timeouts.Total, c.Timeouts.Resolution))
 	}
 	if c.NVD.ResultsPerCPE <= 0 {
 		errs = append(errs, errors.New("nvd.results_per_cpe must be positive"))

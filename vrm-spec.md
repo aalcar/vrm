@@ -164,7 +164,7 @@ All automated sources implement `Source` and run concurrently after entity resol
 | Source | Keyed on | Access | Notes |
 |---|---|---|---|
 | **BitSight** | domain | Licensed API key | Pull exact endpoints from BitSight's own API docs. Do not guess paths. A domain search is fuzzy and returns unrelated customer subdomains — prefer an exact `primary_domain` match and surface the alternatives. |
-| **NVD (NIST)** | CPE 2.3 | Free CVE API 2.0; `NVD_API_KEY` optional | Query with **`virtualMatchString`, not `cpeName`** — `cpeName` requires a concrete version and 404s on the version-agnostic CPEs resolution produces. 5 req/30s without a key, 50 with. Paginate. **Zero results is ambiguous** and must be disambiguated against the CPE dictionary — see §15. |
+| **NVD (NIST)** | CPE 2.3 | Free CVE API 2.0; `NVD_API_KEY` optional | Query with **`virtualMatchString`, not `cpeName`** — `cpeName` requires a concrete version and 404s on the version-agnostic CPEs resolution produces. 5 req/30s without a key, 50 with. Paginate. **Zero results is ambiguous** and must be disambiguated against the CPE dictionary — see §15. Its CPE API 2.0 is also read *before* the fan-out, by entity resolution, to enumerate a vendor's registered products (§10); `cpeMatchString` and `keywordSearch` combine there. **One NVD instance serves both** — the rate limiter lives on it. |
 | **OSV** | package + ecosystem | Free API (`api.osv.dev`) | Keyed on **open-source packages, not companies.** Only meaningful if the vendor publishes OSS packages; otherwise `StatusSkipped`. Do not force a vendor→package mapping. **Ecosystem is mandatory** — a name-only query is rejected with HTTP 400. Severity is a CVSS *vector*, not a score. |
 | **FedRAMP Marketplace** | product / company name | **No official public API** — scrape | Read `www.fedramp.gov/marketplace/products/`. `marketplace.fedramp.gov` is now a SvelteKit shell that only redirects there, and its former `/api/v1/providers` JSON API returns **404**. The listing is ~4.7 MB of server-rendered HTML carrying the whole catalogue (674 offerings when built), so it is fetched whole and filtered locally. **Parse the per-record variable assignments, not the nested `{id,csp,cso,status,…}` literals** — those are `leveraged_systems` dependency lists whose status is stale. See §15. |
 | **CA Attorney General** | company name | No API — scrape the public breach-notification list | `oag.ca.gov/privacy/databreach/list`, filtered by `field_sb24_org_name_value`. A Drupal view with stable per-column classes. Authoritative for breaches **reported in California** — an empty result is never "never breached". The filter is a **substring** match, so record each row's organization name as filed rather than assuming it is the vendor. **A no-match page renders no `<table>` at all**, only a `view-empty` div; that div is the only thing distinguishing a clean vendor from a broken parser. |
@@ -414,10 +414,23 @@ type Report struct {
 
 ## 10. Assessment flow
 
-1. **Entity resolution.** LLM call with a strict-JSON prompt: company + service →
-   `ResolvedEntity`. Prompt it to return `[]` for anything it cannot determine rather than
-   guessing; parse strictly and reject malformed output. This is the weakest link — a wrong
-   CPE silently yields the wrong CVEs.
+1. **Entity resolution.** Company + service → `ResolvedEntity`. This is the weakest link —
+   a wrong CPE silently yields the wrong CVEs — so it is three steps, not one call:
+   1. **Propose.** LLM call with a strict-JSON prompt. Domains, packages, aliases, and
+      candidate **CPE vendor tokens**; CPEs themselves are a hint, not an answer. Prompt it
+      to return `[]` for anything it cannot determine rather than guessing; parse strictly
+      and reject malformed output.
+   2. **Catalogue.** Read the vendor's registered products out of NVD's CPE dictionary. This
+      is the authoritative list of what may be queried at all; a vendor NVD does not list is
+      a real answer (no CPEs), not a failure.
+   3. **Select.** A proposed CPE the catalogue confirms is kept as-is. Otherwise a second,
+      constrained LLM call chooses from the catalogue, and every returned token is checked
+      for membership — one that is not in the list is dropped as invented.
+
+   The split exists because composing a CPE product token and choosing one from an
+   authoritative list are different tasks: the first invents when it does not know, the
+   second is mechanically verifiable. Steps 2 and 3 are skipped when `nvd` is off, and the
+   CPEs are then labelled as unchecked rather than passing as confirmed.
 2. **Fan out.** All automated sources (§6), all manual sources (§7), and the research call,
    concurrently, each receiving `Query` and `ResolvedEntity`. Each checks the store first,
    calls out on miss, writes through. Collect every `Section` independently — one failure
@@ -496,6 +509,7 @@ cache_ttl: { ... }        # see §11
 timeouts:
   per_source: 30s
   research: 240s          # the checklist call; 22-46s observed since the brevity rule
+  resolution: 120s        # two model calls with NVD dictionary reads between them (§10)
   total: 360s             # ceiling, not a target; manual sources return instantly
 
 nvd:
@@ -534,6 +548,12 @@ output is rejected cleanly rather than propagated.
 Uses the API's structured-outputs feature (`output_config.format` + `json_schema`), which
 makes the strict-JSON contract guaranteed rather than merely requested. `--domain` and
 `--cpe` override a bad mapping without editing code.
+
+**Revised after Phase 9.** CPE resolution is now grounded in NVD's CPE dictionary
+(`resolve_cpe.go`): the model proposes a vendor token, NVD supplies the registered products,
+and the model selects from that list. The acceptance criterion above was the thing that would
+not hold — "Okta" + "SSO" produced a *plausible* CPE on every run and a *real* one on none.
+It now yields six, all confirmed, identically across three consecutive runs. See §10 and §15.
 
 ### Phase 3 — NVD ✅
 CVE API 2.0 by resolved CPEs; normalize with severity counts; `StatusSkipped` when no CPEs;
@@ -676,6 +696,24 @@ partials as they land, then the full report.
   CPE dictionary. Both live Okta runs during Phase 3 resolved to a fabricated CPE
   (`okta:okta`, then `okta:single_sign-on`; NVD's real products are `access_gateway`,
   `verify`, …), which would otherwise have rendered as a clean bill of health.
+- **Do not ask the model to write an identifier a registry can hand you.** The fabricated
+  CPEs above were not a prompt problem, and eighteen months of prompt wording would not have
+  fixed them: six consecutive "Okta"+"SSO" runs returned no CPE four times and an invented
+  one twice, from the same prompt. The fix was to change what is asked for. The vendor token
+  is near-deterministic and one dictionary request settles it; the product token is a lookup
+  into NVD's registry, and a model that cannot recall it composes a plausible substitute. So
+  the model proposes a vendor, NVD supplies the products, and the model chooses from that
+  list (§10). Selection is verifiable — membership is checked, and a token outside the list
+  is dropped as invented — where composition is not. The same three runs now return the same
+  six real CPEs, and the catalogue is a hard ceiling on what can be queried.
+- **A partial catalogue is a weaker claim than a complete one, and must say so.** NVD holds
+  15,183 dictionary rows for Microsoft against 287 for Okta, so an oversized vendor is read
+  as one page and narrowed by the service name. `keywordSearch` requires every word to
+  match, and NVD often files a product under a name the vendor retired — "Azure DevOps
+  Server" returns 0 rows because NVD still calls it Team Foundation Server. When narrowing
+  finds nothing the truncated page is kept, because "too big to read" must never become
+  "this vendor registers no products". Narrowing to the two-word "Azure DevOps" matches
+  exactly 1 row and would have hidden the correct product family entirely.
 - **When scraping, find the authoritative record before writing the parser.** The FedRAMP
   listing is the live example, and it is a trap that hides in plain sight. The page carries
   ~5,600 tidy `{id:"…",csp:"…",cso:"…",status:"…"}` object literals, which look exactly like
@@ -691,9 +729,9 @@ partials as they land, then the full report.
   correlates at only r=0.51, and the same budget produced 44s and 323s on near-identical
   work. The real cause was generation time — a brevity rule and an explicit `effort` setting
   took the median from 116s to 30s, which no amount of search tuning would have found.
-  `effort` is worth setting explicitly on both LLM calls: the default was slower *and*
-  answered fewer fields, and `medium` returned an empty checklist in two runs of five where
-  `low` never did in eighteen.
+  `effort` is worth setting explicitly on every LLM call — all three of them, counting
+  resolution's second: the default was slower *and* answered fewer fields, and `medium`
+  returned an empty checklist in two runs of five where `low` never did in eighteen.
 - **Manual sources are not stubs to be "finished later."** They are the permanent design
   for categories that should not be automated. Do not write HTTP clients for them.
 - **Manual entries are analyst data, not cache.** They share a table for convenience only.

@@ -4,6 +4,9 @@
 # The two LLM jobs are kept separate (spec §2.4) and have very different cost profiles, so
 # each gets its own model. Structured outputs — which make the resolution prompt's JSON
 # contract enforceable rather than merely requested — need Sonnet 5 or newer.
+#
+# models.resolution covers both of resolution's calls: proposing identifiers, and choosing a
+# product from the list NVD's dictionary returns. They are one job in two steps, not two jobs.
 models:
   resolution: claude-sonnet-5
   research: claude-sonnet-5 # revisit at phase 7; this is the expensive, web-search-backed call
@@ -55,6 +58,11 @@ timeouts:
   # because the old distribution had a long tail and one round of measurements is not proof
   # the tail is gone.
   research: 240s
+  # Entity resolution: a model call, one or two reads of NVD's CPE dictionary, and a second
+  # model call to pick a product out of what came back. Each dictionary read waits out NVD's
+  # six-second unkeyed courtesy interval, so per_source is nowhere near enough — and a
+  # resolution timeout kills the assessment, where a source timeout marks one section.
+  resolution: 120s
   total: 360s # a ceiling, not a target; manual sources return instantly
 
 nvd:

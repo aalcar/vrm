@@ -9,10 +9,18 @@ import (
 	"testing"
 )
 
+// The okta fixture is a captured reply with cpe_vendors added when that field entered the
+// schema. Its cpes entry is the real thing the model returned: cpe:2.3:a:okta:okta, a product
+// NVD has never registered. It is kept precisely because it is wrong — the dictionary lookup
+// in resolve_cpe.go exists to catch exactly this, and a fixture with a valid CPE would not
+// exercise it.
 func TestParseResolutionFixture(t *testing.T) {
 	res, err := parseResolution(string(fixture(t, "resolution_okta.json")))
 	if err != nil {
 		t.Fatalf("parseResolution: %v", err)
+	}
+	if got := strings.Join(res.CPEVendors, ","); got != "okta,auth0" {
+		t.Errorf("CPEVendors = %q, want the candidate vendor tokens", got)
 	}
 	if res.Entity.CanonicalName != "Okta, Inc." {
 		t.Errorf("CanonicalName = %q", res.Entity.CanonicalName)
@@ -237,8 +245,62 @@ func TestResolveSendsStructuredOutputSchema(t *testing.T) {
 	if schema["additionalProperties"] != false {
 		t.Error("schema allows additional properties; the contract is not closed")
 	}
-	if _, ok := schema["properties"].(map[string]any)["cpes"]; !ok {
-		t.Error("schema does not declare cpes")
+	props, _ := schema["properties"].(map[string]any)
+	for _, field := range []string{"cpes", "cpe_vendors"} {
+		if _, ok := props[field]; !ok {
+			t.Errorf("schema does not declare %s", field)
+		}
+	}
+}
+
+// The vendor token is the half of a CPE the model can reliably get right, and it is pasted
+// straight into a dictionary match string. Anything that is not a bare token would query
+// something other than what it names.
+func TestNormalizeCPEVendor(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+		ok             bool
+	}{
+		{"bare token", "okta", "okta", true},
+		{"underscores are normal", "red_hat", "red_hat", true},
+		{"hyphens are normal", "d-link", "d-link", true},
+		{"case is normalized", "Atlassian", "atlassian", true},
+		{"whitespace is trimmed", "  okta\t", "okta", true},
+		// Registered vendor tokens do contain dots. A domain-looking token is the wrong
+		// answer, but the dictionary reports it as unregistered — which is louder than
+		// dropping it here, where nothing would say why the lookup never happened.
+		{"a dot is allowed through", "node.js", "node.js", true},
+		{"a whole CPE is not a vendor token", "cpe:2.3:a:okta:okta", "", false},
+		{"a company name with spaces", "Okta Inc", "", false},
+		{"a URL", "https://okta.com", "", false},
+		{"empty", "   ", "", false},
+		{"a wildcard would match every vendor", "*", "", false},
+		{"a NA marker is not a vendor", "-", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := normalizeCPEVendor(tt.in)
+			if ok != tt.ok || got != tt.want {
+				t.Errorf("normalizeCPEVendor(%q) = %q, %v; want %q, %v",
+					tt.in, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+// A dropped vendor token is reported, like every other discarded identifier: silently losing
+// one looks exactly like a company that publishes no software.
+func TestParseResolutionReportsDroppedVendorTokens(t *testing.T) {
+	res, err := parseResolution(`{"canonical_name":"Okta","domains":[],
+		"cpe_vendors":["okta","Okta Inc","okta"],"cpes":[],"packages":[],"aliases":[]}`)
+	if err != nil {
+		t.Fatalf("parseResolution: %v", err)
+	}
+	if got := strings.Join(res.CPEVendors, ","); got != "okta" {
+		t.Errorf("CPEVendors = %q, want the duplicate collapsed and the bad one dropped", got)
+	}
+	if len(res.Dropped) != 1 || !strings.Contains(res.Dropped[0], "Okta Inc") {
+		t.Errorf("Dropped = %v, want it to name the rejected token", res.Dropped)
 	}
 }
 

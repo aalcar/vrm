@@ -43,6 +43,60 @@ const nvdMaxResultsPerPage = 2000
 // deadline is generous. CPEs beyond the cap are reported, never silently dropped.
 const defaultNVDMaxCPEs = 8
 
+// CPEProduct is one product NVD registers under a vendor.
+//
+// Token is the CPE product component — the thing that goes into a match string. Title is
+// NVD's own English title for the row the token was first seen on, kept verbatim, version
+// tail and all: it is a recorded value, and trimming it back to a guess at "the product
+// name" would be inventing one.
+type CPEProduct struct {
+	Token string // access_gateway
+	Title string // "Okta Access Gateway 2021.03.6"
+}
+
+// CPECatalogue is what NVD's CPE dictionary holds for one vendor. It is the authoritative
+// answer to "which products has this vendor actually registered", and it is what entity
+// resolution picks from instead of composing a product token itself.
+type CPECatalogue struct {
+	// Vendor is the cpe:2.3:<part>:<vendor> prefix that was queried.
+	Vendor   string
+	Products []CPEProduct
+	// TotalRows is what NVD said it holds, which is rows and not products: the dictionary
+	// carries one row per version, so nine products can be hundreds of rows.
+	TotalRows int
+	// Narrowed records the keyword used to cut an oversized vendor down, empty when the
+	// unfiltered query was small enough. A narrowed catalogue is a view of the vendor
+	// through one search term, not the vendor's full range, and callers must say so.
+	Narrowed string
+	// Complete reports that every row NVD holds was read, so the product list is exhaustive.
+	// When false the list is a sample: a product missing from it may still exist.
+	Complete bool
+}
+
+// Exists reports whether NVD has ever heard of this vendor.
+func (c CPECatalogue) Exists() bool { return c.TotalRows > 0 }
+
+// Tokens lists the product tokens, which is the form a match string and an error message
+// both want.
+func (c CPECatalogue) Tokens() []string {
+	out := make([]string, 0, len(c.Products))
+	for _, p := range c.Products {
+		out = append(out, p.Token)
+	}
+	return out
+}
+
+// Has reports whether a product token appears in this catalogue. Case-insensitive, because
+// CPE components are lowercase by convention and a caller may not have normalised yet.
+func (c CPECatalogue) Has(token string) bool {
+	for _, p := range c.Products {
+		if strings.EqualFold(p.Token, token) {
+			return true
+		}
+	}
+	return false
+}
+
 // NVD fetches published CVEs for a vendor's resolved CPEs.
 //
 // # Why virtualMatchString and not cpeName
@@ -357,19 +411,81 @@ func (n *NVD) vendorProducts(ctx context.Context, match string) ([]string, error
 	if vendor == "" {
 		return nil, nil
 	}
-
-	u := fmt.Sprintf("%s/cpes/2.0?cpeMatchString=%s&resultsPerPage=%d",
-		n.baseURL, url.QueryEscape(vendor), nvdMaxResultsPerPage)
-
-	body, err := n.get(ctx, u)
+	cat, err := n.VendorProducts(ctx, vendor, "")
 	if err != nil {
 		return nil, err
 	}
+	return cat.Tokens(), nil
+}
+
+// VendorProducts reads a vendor's product catalogue out of NVD's CPE dictionary.
+//
+// vendor is a cpe:2.3:<part>:<vendor> prefix. narrow is an optional search term used only
+// if the vendor is too large to read in one page — pass the service being assessed, or ""
+// to accept a truncated list.
+//
+// # Why one page and not a full walk
+//
+// The dictionary holds a row per version, so vendors range from 19 rows to Microsoft's
+// 15,183. Walking 15,183 rows costs eight requests, and at the unkeyed six-second courtesy
+// interval that is most of an assessment's budget spent restating "microsoft" — while the
+// distinct product list, which is all anyone wants, is almost certainly complete after the
+// first page. So this reads one page, narrows by keyword when the vendor overflows it, and
+// reports Complete honestly rather than implying an exhaustive answer it did not pay for.
+func (n *NVD) VendorProducts(ctx context.Context, vendor, narrow string) (CPECatalogue, error) {
+	cat, err := n.cataloguePage(ctx, vendor, "")
+	if err != nil {
+		return CPECatalogue{}, err
+	}
+	if cat.Complete || strings.TrimSpace(narrow) == "" {
+		return cat, nil
+	}
+
+	narrowed, err := n.cataloguePage(ctx, vendor, narrow)
+	if err != nil {
+		return CPECatalogue{}, err
+	}
+	// A keyword that matches nothing has told us nothing about the vendor, and returning it
+	// would turn "too big to read" into "this vendor registers no products" — the confident
+	// wrong answer this whole path exists to avoid. Keep the truncated list instead.
+	//
+	// This fallback is load-bearing, not defensive. keywordSearch requires every word to
+	// match, and NVD often files a product under a name the vendor has since retired:
+	// "Azure DevOps Server" returns 0 rows for Microsoft because NVD still calls it Team
+	// Foundation Server. Narrowing to the two-word "Azure DevOps" returns exactly 1 row and
+	// would have hidden the whole correct product family. The truncated first page found it.
+	if !narrowed.Exists() {
+		return cat, nil
+	}
+	return narrowed, nil
+}
+
+// cataloguePage fetches one page of the dictionary for a vendor, optionally filtered.
+//
+// cpeMatchString and keywordSearch combine on this endpoint; that was verified against the
+// live service, not assumed (CLAUDE.md: do not guess).
+func (n *NVD) cataloguePage(ctx context.Context, vendor, narrow string) (CPECatalogue, error) {
+	u := fmt.Sprintf("%s/cpes/2.0?cpeMatchString=%s&resultsPerPage=%d",
+		n.baseURL, url.QueryEscape(vendor), nvdMaxResultsPerPage)
+	if narrow = strings.TrimSpace(narrow); narrow != "" {
+		u += "&keywordSearch=" + url.QueryEscape(narrow)
+	}
+
+	body, err := n.get(ctx, u)
+	if err != nil {
+		return CPECatalogue{}, err
+	}
 	page, err := parseNVDCPEs(body)
 	if err != nil {
-		return nil, fmt.Errorf("CPE dictionary lookup for %s: %w", vendor, err)
+		return CPECatalogue{}, fmt.Errorf("CPE dictionary lookup for %s: %w", vendor, err)
 	}
-	return page.products, nil
+	return CPECatalogue{
+		Vendor:    vendor,
+		Products:  page.products,
+		TotalRows: page.total,
+		Narrowed:  narrow,
+		Complete:  page.rows >= page.total,
+	}, nil
 }
 
 // get performs a rate-limited GET and returns the body, mapping transport and HTTP status
@@ -725,26 +841,36 @@ type nvdCPEResponse struct {
 	Products     []struct {
 		CPE struct {
 			CPEName string `json:"cpeName"`
+			Titles  []struct {
+				Title string `json:"title"`
+				Lang  string `json:"lang"`
+			} `json:"titles"`
 		} `json:"cpe"`
 	} `json:"products"`
 }
 
 type nvdCPEPage struct {
-	total    int
-	products []string
+	total int
+	// rows is how many entries this page actually carried, which is what says whether the
+	// page covered everything NVD holds. totalResults alone cannot: it counts rows on the
+	// server, not rows received.
+	rows     int
+	products []CPEProduct
 }
 
-// parseNVDCPEs extracts the distinct product tokens from a CPE dictionary response.
+// parseNVDCPEs extracts the distinct products from a CPE dictionary response.
 //
 // The dictionary lists one entry per version, so a vendor with nine products can return
-// hundreds of rows; only the distinct product names are useful here.
+// hundreds of rows; only the distinct products are useful here. The first English title seen
+// for a product is kept alongside its token — the token is what a match string needs, and the
+// title is what makes the list readable when it is offered as a set of choices.
 func parseNVDCPEs(body []byte) (nvdCPEPage, error) {
 	var resp nvdCPEResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nvdCPEPage{}, fmt.Errorf("parse CPE dictionary response: %w", err)
 	}
 
-	page := nvdCPEPage{total: resp.TotalResults}
+	page := nvdCPEPage{total: resp.TotalResults, rows: len(resp.Products)}
 	seen := make(map[string]bool)
 	for i, p := range resp.Products {
 		parts := strings.Split(p.CPE.CPEName, ":")
@@ -753,11 +879,23 @@ func parseNVDCPEs(body []byte) (nvdCPEPage, error) {
 				"CPE dictionary entry %d has a malformed cpeName %q; response shape may have changed",
 				i, p.CPE.CPEName)
 		}
-		if name := parts[4]; !seen[name] {
-			seen[name] = true
-			page.products = append(page.products, name)
+		name := parts[4]
+		if seen[name] {
+			continue
 		}
+		seen[name] = true
+
+		title := ""
+		for _, t := range p.CPE.Titles {
+			if t.Lang == "en" {
+				title = t.Title
+				break
+			}
+		}
+		page.products = append(page.products, CPEProduct{Token: name, Title: title})
 	}
-	sort.Strings(page.products)
+	sort.Slice(page.products, func(i, j int) bool {
+		return page.products[i].Token < page.products[j].Token
+	})
 	return page, nil
 }

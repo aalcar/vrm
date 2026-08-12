@@ -2,6 +2,7 @@ package sources
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -88,19 +89,49 @@ func TestParseNVDCPEsFixture(t *testing.T) {
 		t.Fatal("totalResults lost")
 	}
 	// The dictionary lists one row per version; only distinct products are useful.
+	tokens := CPECatalogue{Products: page.products}.Tokens()
 	want := "access_gateway"
-	if !containsString(page.products, want) {
-		t.Errorf("products = %v, want it to contain %q", page.products, want)
+	if !containsString(tokens, want) {
+		t.Errorf("products = %v, want it to contain %q", tokens, want)
 	}
 	// The whole point of this lookup: NVD has no product literally named "okta".
-	if containsString(page.products, "okta") {
+	if containsString(tokens, "okta") {
 		t.Error("fixture unexpectedly contains an okta:okta product")
 	}
-	for i := 1; i < len(page.products); i++ {
-		if page.products[i-1] > page.products[i] {
-			t.Fatalf("products not sorted: %v", page.products)
+	for i := 1; i < len(tokens); i++ {
+		if tokens[i-1] > tokens[i] {
+			t.Fatalf("products not sorted: %v", tokens)
 		}
 	}
+	// The title travels with the token. It is what makes the catalogue readable when it is
+	// offered to the model as a list of choices, and a token-only list resolves worse.
+	for _, p := range page.products {
+		if p.Title == "" {
+			t.Errorf("product %q carries no English title", p.Token)
+		}
+	}
+	// rows is what decides whether a page saw everything; totalResults counts rows on the
+	// server. This fixture is a real 9-row page of a 287-row vendor, so they must differ.
+	if page.rows != len(fixtureProducts(t, "nvd_cpes_okta_vendor.json")) {
+		t.Errorf("rows = %d, want it to count the entries actually received", page.rows)
+	}
+	if page.rows >= page.total {
+		t.Errorf("rows=%d total=%d: this fixture is a partial page and must read as one",
+			page.rows, page.total)
+	}
+}
+
+// fixtureProducts counts the raw product entries in a dictionary fixture, independently of
+// the parser under test.
+func fixtureProducts(t *testing.T, name string) []any {
+	t.Helper()
+	var resp struct {
+		Products []any `json:"products"`
+	}
+	if err := json.Unmarshal(fixture(t, name), &resp); err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return resp.Products
 }
 
 func TestParseNVDCPEsEmpty(t *testing.T) {
@@ -748,5 +779,141 @@ func TestNVDResultAnyVerified(t *testing.T) {
 				t.Errorf("AnyVerified() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// --- VendorProducts: the catalogue entity resolution picks from ---------------
+//
+// This is the authoritative half of CPE resolution. The model proposes a vendor; NVD says
+// which products exist under it. Everything downstream is bounded by what these tests cover.
+
+func TestVendorProductsReadsTheCatalogue(t *testing.T) {
+	var queries []string
+	n := newTestNVD(t, func(w http.ResponseWriter, req *http.Request) {
+		queries = append(queries, req.URL.RawQuery)
+		_, _ = w.Write(fixture(t, "nvd_cpes_okta_vendor.json"))
+	}, "")
+
+	cat, err := n.VendorProducts(context.Background(), "cpe:2.3:a:okta", "")
+	if err != nil {
+		t.Fatalf("VendorProducts: %v", err)
+	}
+	if !cat.Exists() {
+		t.Fatal("a vendor with 287 dictionary rows does not exist")
+	}
+	if got := strings.Join(cat.Tokens(), ","); !strings.Contains(got, "access_gateway") {
+		t.Errorf("products = %s, want the real Okta catalogue", got)
+	}
+	// The trap this whole path exists to close: NVD registers no product called "okta".
+	if cat.Has("okta") {
+		t.Error("catalogue claims an okta:okta product")
+	}
+	// A 9-row page of a 287-row vendor is a sample, and saying otherwise would turn "not in
+	// this page" into "NVD does not register it".
+	if cat.Complete {
+		t.Errorf("Complete = true for a %d-row page of %d rows", len(cat.Products), cat.TotalRows)
+	}
+	if len(queries) != 1 {
+		t.Errorf("made %d requests, want 1: no narrowing term was given", len(queries))
+	}
+	if strings.Contains(queries[0], "keywordSearch") {
+		t.Errorf("unfiltered lookup sent a keywordSearch: %s", queries[0])
+	}
+}
+
+// A page that covered every row NVD holds is exhaustive, and only then may it say so.
+func TestVendorProductsCompleteWhenThePageCoversEverything(t *testing.T) {
+	n := newTestNVD(t, func(w http.ResponseWriter, req *http.Request) {
+		_, _ = w.Write(fixture(t, "nvd_cpes_okta_gateway.json"))
+	}, "")
+
+	cat, err := n.VendorProducts(context.Background(), "cpe:2.3:a:okta", "")
+	if err != nil {
+		t.Fatalf("VendorProducts: %v", err)
+	}
+	if !cat.Complete {
+		t.Errorf("Complete = false for a %d-row page of %d rows", len(cat.Products), cat.TotalRows)
+	}
+}
+
+// Microsoft holds 15,183 dictionary rows — eight pages, and at the unkeyed six-second
+// interval most of an assessment's budget. The service narrows it to one page instead.
+func TestVendorProductsNarrowsAnOversizedVendor(t *testing.T) {
+	var queries []string
+	n := newTestNVD(t, func(w http.ResponseWriter, req *http.Request) {
+		queries = append(queries, req.URL.RawQuery)
+		if req.URL.Query().Get("keywordSearch") != "" {
+			_, _ = w.Write(fixture(t, "nvd_cpes_okta_gateway.json"))
+			return
+		}
+		_, _ = w.Write(fixture(t, "nvd_cpes_okta_vendor.json"))
+	}, "")
+
+	cat, err := n.VendorProducts(context.Background(), "cpe:2.3:a:okta", "Access Gateway")
+	if err != nil {
+		t.Fatalf("VendorProducts: %v", err)
+	}
+	if len(queries) != 2 {
+		t.Fatalf("made %d requests, want 2: unfiltered, then narrowed", len(queries))
+	}
+	if !strings.Contains(queries[1], "keywordSearch=Access+Gateway") {
+		t.Errorf("second request did not carry the narrowing term: %s", queries[1])
+	}
+	if cat.Narrowed != "Access Gateway" {
+		t.Errorf("Narrowed = %q, want the term recorded so the caller can qualify the answer",
+			cat.Narrowed)
+	}
+	if !cat.Complete || len(cat.Products) != 1 {
+		t.Errorf("got %d products, Complete=%v; want the narrowed page", len(cat.Products), cat.Complete)
+	}
+}
+
+// A keyword matching nothing has said nothing about the vendor. Returning it would turn "too
+// big to read" into "this vendor registers no products", which is the confident wrong answer.
+func TestVendorProductsKeepsThePartialListWhenNarrowingFindsNothing(t *testing.T) {
+	n := newTestNVD(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Query().Get("keywordSearch") != "" {
+			_, _ = w.Write(fixture(t, "nvd_cpes_empty.json"))
+			return
+		}
+		_, _ = w.Write(fixture(t, "nvd_cpes_okta_vendor.json"))
+	}, "")
+
+	cat, err := n.VendorProducts(context.Background(), "cpe:2.3:a:okta", "nothing matches this")
+	if err != nil {
+		t.Fatalf("VendorProducts: %v", err)
+	}
+	if !cat.Exists() {
+		t.Fatal("a vendor NVD holds 287 rows for came back as unregistered")
+	}
+	if len(cat.Products) != 9 || cat.Narrowed != "" {
+		t.Errorf("got %d products narrowed by %q, want the unfiltered page kept",
+			len(cat.Products), cat.Narrowed)
+	}
+}
+
+// A vendor NVD has never heard of. Distinct from a failure, and the caller must be able to
+// tell: one means the company registers no CPEs, the other means we could not look.
+func TestVendorProductsOnAnUnknownVendor(t *testing.T) {
+	n := newTestNVD(t, func(w http.ResponseWriter, req *http.Request) {
+		_, _ = w.Write(fixture(t, "nvd_cpes_empty.json"))
+	}, "")
+
+	cat, err := n.VendorProducts(context.Background(), "cpe:2.3:a:notavendor", "SSO")
+	if err != nil {
+		t.Fatalf("an unregistered vendor is an answer, not an error: %v", err)
+	}
+	if cat.Exists() || len(cat.Products) != 0 {
+		t.Errorf("got %+v, want an empty catalogue", cat)
+	}
+}
+
+func TestVendorProductsHTTPErrorIsAnError(t *testing.T) {
+	n := newTestNVD(t, func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}, "")
+
+	if _, err := n.VendorProducts(context.Background(), "cpe:2.3:a:okta", ""); err == nil {
+		t.Fatal("VendorProducts swallowed HTTP 503")
 	}
 }

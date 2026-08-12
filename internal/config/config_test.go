@@ -179,3 +179,60 @@ func TestValidateReportsAllProblemsAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// Entity resolution makes two model calls with NVD dictionary reads between them, and each
+// read waits out NVD's six-second unkeyed interval. A per_source budget sized for one HTTP
+// request would time it out — and a resolution timeout kills the assessment, where a source
+// timeout marks one section.
+func TestResolutionTimeoutFallsBackToPerSource(t *testing.T) {
+	tests := []struct {
+		name string
+		in   Timeouts
+		want time.Duration
+	}{
+		{
+			name: "its own budget wins",
+			in:   Timeouts{PerSource: Duration(30 * time.Second), Resolution: Duration(120 * time.Second)},
+			want: 120 * time.Second,
+		},
+		{
+			// Omitted is a valid config, not a zero timeout: an unset budget must never
+			// become an instantly-expired context.
+			name: "unset falls back",
+			in:   Timeouts{PerSource: Duration(30 * time.Second)},
+			want: 30 * time.Second,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.in.ResolutionTimeout(); got != tt.want {
+				t.Errorf("ResolutionTimeout() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Resolution runs inside the total budget and every source waits on it, so a resolution
+// budget larger than the whole assessment can only ever be a mistake.
+func TestResolutionTimeoutCannotExceedTotal(t *testing.T) {
+	body := strings.Replace(validConfig, "  per_source: 30s", "  per_source: 30s\n  resolution: 600s", 1)
+	_, err := Load(writeConfig(t, body))
+	if err == nil {
+		t.Fatal("a resolution budget larger than the whole assessment was accepted")
+	}
+	if !strings.Contains(err.Error(), "timeouts.resolution") {
+		t.Errorf("error does not name the offending field: %v", err)
+	}
+}
+
+// An omitted resolution budget is a valid config, not a zero timeout.
+func TestResolutionTimeoutIsOptionalInTheFile(t *testing.T) {
+	cfg, err := Load(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Timeouts.ResolutionTimeout(); got != cfg.Timeouts.PerSource.Duration() {
+		t.Errorf("ResolutionTimeout() = %v, want the per_source fallback %v",
+			got, cfg.Timeouts.PerSource)
+	}
+}
