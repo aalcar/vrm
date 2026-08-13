@@ -2,6 +2,7 @@ package report
 
 import (
 	"github.com/aalcar/vrm/internal/assess"
+	"github.com/aalcar/vrm/internal/sources"
 	"github.com/aalcar/vrm/internal/store"
 )
 
@@ -22,14 +23,22 @@ type Presentation struct {
 // and the web UI forgets is a fact an analyst sees in one place and not the other, and the
 // ones most likely to be forgotten — the cache markers, the dropped identifiers — are exactly
 // the ones that change what the report means.
+// A Result whose Report is still nil — the interim state the OnResolved callback sees — is
+// valid input and yields a report with no sections. The streaming front-end renders the
+// resolved entity from exactly that, before any source has finished, and a nil dereference
+// here took down the assessment it was describing on the first live request.
 func FromResult(res assess.Result, r *assess.Runner, p Presentation) Report {
 	cfg := r.Config()
+	var sections []sources.Section
+	if res.Report != nil {
+		sections = res.Report.Sections
+	}
 	return Report{
-		Query:            res.Report.Query,
+		Query:            res.Query,
 		Entity:           res.Entity,
 		Resolution:       res.Resolution,
-		Sections:         res.Report.Sections,
-		CacheKey:         [2]string{store.NormalizeKey(res.Report.Query.Company), store.NormalizeKey(res.Report.Query.Service)},
+		Sections:         sections,
+		CacheKey:         [2]string{store.NormalizeKey(res.Query.Company), store.NormalizeKey(res.Query.Service)},
 		DomainOverridden: res.DomainOverridden,
 		CPEsOverridden:   res.CPEsOverridden,
 		ResolutionCached: res.ResolutionCached,

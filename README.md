@@ -16,8 +16,7 @@ anything. [`CLAUDE.md`](CLAUDE.md) covers invariants and workflow.
 
 ## Status
 
-**Phases 0–11 complete**; Phase 12 (SSE progress streaming) is next. See spec §13 for the
-full phased plan.
+**Phases 0–12 complete** — the whole spec. See spec §13 for the phased plan.
 
 `vrm assess` today resolves a company + service to machine identifiers via the Anthropic
 API, queries every source below concurrently, and prints a sourced report. Successful
@@ -49,9 +48,14 @@ on the page came from a vendor API, a scraped page, or a language model, so noth
 wrapped in `template.HTML` — multi-line values are handled with CSS. There is no auth and no
 TLS termination by design (spec §2); run it on localhost or behind something that has them.
 
-A fresh assessment blocks the request for ~30s and the server sets no `WriteTimeout`, because
-any value not larger than `timeouts.total` would truncate the most expensive reports mid-HTML
-with a 200 already sent. Phase 12 replaces the wait with streamed sections.
+Sections stream in as each source returns, over SSE. `POST /assess` runs nothing — it returns a
+shell whose `sse-connect` points at `GET /assess/stream`, because EventSource can only issue a
+GET — and the stream emits the resolved entity first, then a section per source in completion
+order, then the finished report in `SectionOrder` replacing the lot. A real run: the entity at
+6.6s, eight sources by 7.9s, and `llm_research` at 30.2s. Nothing waits on the slow one.
+
+The server sets no `WriteTimeout`: any value not larger than `timeouts.total` would cut the
+most expensive reports off mid-stream with a 200 already sent.
 
 ## Setup
 
@@ -159,14 +163,14 @@ stop for review.
 The core is a library; the interfaces are thin front-ends over it.
 
 - `cmd/vrm` — CLI (`assess`, `set`)
-- `cmd/vrmd` — web server (Go `html/template` + HTMX); SSE progress is Phase 12
+- `cmd/vrmd` — web server (Go `html/template` + HTMX, SSE progress)
 - `internal/assess` — the pipeline: resolve → fan-out → aggregate → record. Both front-ends
   call `Runner.Run`; it owns the single shared `*sources.NVD`
 - `internal/sources` — one file per source, all behind a common `Source` interface
 - `internal/store` — Postgres cache and analyst-supplied manual entries
 - `internal/report` — the terminal renderer and the outcome/summary logic both UIs share,
   pinned by golden files in `internal/report/testdata`
-- `internal/web` — handlers and embedded templates for the browser
+- `internal/web` — handlers, SSE stream, and embedded templates for the browser
 
 Data sources are a **fixed** set (spec §6 and §7). Every automated source is a passive
 lookup against an existing database — `vrm` never scans or probes vendor infrastructure.

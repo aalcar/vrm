@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -472,5 +473,82 @@ func TestCPEsVerified(t *testing.T) {
 					verified, known, tc.verified, tc.known)
 			}
 		})
+	}
+}
+
+// TestObserverSeesEverySectionAsItLands is the Phase 12 contract at the orchestrator level:
+// a front-end can show sources arriving instead of waiting for the slowest one.
+func TestObserverSeesEverySectionAsItLands(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+
+	a := New([]sources.Source{
+		&fakeSource{name: "slow", delay: 200 * time.Millisecond},
+		&fakeSource{name: "fast"},
+		&fakeSource{name: "alsofast"},
+	}, time.Second, WithObserver(func(s sources.Section) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, s.Source)
+	}))
+
+	report := a.Run(context.Background(), sources.Query{}, sources.ResolvedEntity{})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 3 {
+		t.Fatalf("observer saw %d sections, want 3: %v", len(seen), seen)
+	}
+	// Completion order, not registration order — that is the whole point. The slow source
+	// registered first and must not be first out.
+	if seen[len(seen)-1] != "slow" {
+		t.Errorf("the slow source did not arrive last: %v", seen)
+	}
+	if len(report.Sections) != 3 {
+		t.Errorf("the report has %d sections, want 3", len(report.Sections))
+	}
+}
+
+// TestObserverSeesExpiredSections. A source the budget ran out on has a section like any
+// other, and a progress view that simply stopped mentioning it would be the worst of both:
+// no result and no explanation.
+func TestObserverSeesExpiredSections(t *testing.T) {
+	blocked := make(chan struct{})
+	defer close(blocked)
+
+	var mu sync.Mutex
+	seen := map[string]sources.Status{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	New([]sources.Source{
+		&fakeSource{name: "fast"},
+		&fakeSource{name: "hung", blocks: blocked},
+	}, time.Second, WithObserver(func(s sources.Section) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen[s.Source] = s.Status
+	})).Run(ctx, sources.Query{}, sources.ResolvedEntity{})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got, ok := seen["hung"]; !ok || got != sources.StatusFailed {
+		t.Errorf("the expired source was reported as %q (present=%v), want failed", got, ok)
+	}
+	if seen["fast"] != sources.StatusOK {
+		t.Error("the source that did answer was not reported")
+	}
+}
+
+// TestAPanickingObserverDoesNotTakeDownTheAssessment. A progress view is a convenience; it
+// must not be able to kill the assessment it is describing.
+func TestAPanickingObserverDoesNotTakeDownTheAssessment(t *testing.T) {
+	report := New([]sources.Source{&fakeSource{name: "a"}, &fakeSource{name: "b"}},
+		time.Second, WithObserver(func(sources.Section) { panic("observer exploded") })).
+		Run(context.Background(), sources.Query{}, sources.ResolvedEntity{})
+
+	if len(report.Sections) != 2 {
+		t.Errorf("the report has %d sections, want 2", len(report.Sections))
 	}
 }

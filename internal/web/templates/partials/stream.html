@@ -1,0 +1,23 @@
+{{- /*
+  The shell POST /assess returns. It runs nothing — it opens an EventSource against
+  GET /assess/stream, which does the work and writes the report out as it arrives.
+
+  Three listeners on one connection:
+    entity  — swapped in once, before any source has finished
+    section — appended as each source lands, in completion order
+    report  — the finished report, replacing this whole element
+
+  The last one is why the incremental order does not matter: what an analyst ends up reading is
+  the same full render the terminal produces, in SectionOrder, with the summary and config that
+  only exist once everything is in.
+*/ -}}
+{{define "stream.html" -}}
+<div hx-ext="sse" sse-connect="/assess/stream?{{.}}" sse-swap="report" hx-swap="outerHTML">
+  <div id="stream-entity" sse-swap="entity"></div>
+  <h2>sections <span class="hint">as they land</span></h2>
+  <div id="stream-sections" sse-swap="section" hx-swap="beforeend"></div>
+  <p id="stream-status" class="hint">
+    assessing — sources appear above as each one returns…
+  </p>
+</div>
+{{- end}}

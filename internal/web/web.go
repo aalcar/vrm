@@ -22,11 +22,10 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
-	"time"
 
 	"github.com/aalcar/vrm/internal/assess"
-	"github.com/aalcar/vrm/internal/report"
 	"github.com/aalcar/vrm/internal/sources"
 )
 
@@ -74,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.form)
 	mux.HandleFunc("POST /assess", s.assess)
+	mux.HandleFunc("GET /assess/stream", s.stream)
 	return mux
 }
 
@@ -81,12 +81,12 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "form.html", nil)
 }
 
-// assess runs one assessment and returns the report fragment.
+// assess validates the form and hands back the streaming shell.
 //
-// It blocks for as long as the assessment takes — up to timeouts.total, 360s by default.
-// Phase 12 streams sections as they land; until then the indicator in the form is the only
-// thing telling an analyst the request is alive, and the server's WriteTimeout has to exceed
-// the assessment budget or the response is cut off mid-report.
+// It deliberately runs nothing. EventSource can only issue a GET, so the work happens in
+// stream(), and this handler exists to validate what it can while it can still return a plain
+// error — once the stream is open the response is committed and a bad override could only be
+// reported inside it.
 func (s *Server) assess(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.fail(w, errors.New("could not read the form"))
@@ -101,35 +101,29 @@ func (s *Server) assess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := assess.Request{
-		Query: sources.Query{
-			Company: strings.TrimSpace(r.FormValue("company")),
-			Service: strings.TrimSpace(r.FormValue("service")),
-		},
-		Domain:  strings.TrimSpace(r.FormValue("domain")),
-		CPEs:    cpes,
-		NoCache: r.FormValue("no_cache") != "",
-	}
-
-	started := time.Now()
-	result, err := s.runner.Run(r.Context(), req)
-	if err != nil {
-		// A resolution failure is fatal to the run, unlike a source failure: every
-		// deterministic source keys off the resolved entity, so continuing would produce a
-		// report in which everything skipped — which reads as "nothing to report" rather than
-		// "resolution broke".
-		s.log.Error("assessment failed", "err", err, "took", time.Since(started))
-		s.fail(w, err)
+	company := strings.TrimSpace(r.FormValue("company"))
+	service := strings.TrimSpace(r.FormValue("service"))
+	// Checked here rather than left to the Runner so an empty field is a plain error on the
+	// page instead of a stream that opens only to close again.
+	if company == "" || service == "" {
+		s.fail(w, errors.New("company and service are both required"))
 		return
 	}
-	s.log.Info("assessed", "sections", len(result.Report.Sections), "took", time.Since(started))
 
-	s.render(w, "report.html", report.FromResult(result, s.runner, report.Presentation{
-		ConfigPath: s.configPath,
-		// The browser scrolls, so nothing is capped. The caps exist to keep a terminal
-		// readable, and a <details> would hide exactly the rows an analyst scrolled to find.
-		Full: true,
-	}))
+	params := url.Values{}
+	params.Set("company", company)
+	params.Set("service", service)
+	if d := strings.TrimSpace(r.FormValue("domain")); d != "" {
+		params.Set("domain", d)
+	}
+	if len(cpes) > 0 {
+		params.Set("cpe", strings.Join(cpes, ","))
+	}
+	if r.FormValue("no_cache") != "" {
+		params.Set("no_cache", "1")
+	}
+
+	s.render(w, "stream.html", params.Encode())
 }
 
 // render writes one template, or reports the failure loudly.
@@ -161,9 +155,12 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// Escaped like everything else: the error may quote a company name that came from the form.
-	fmt.Fprintf(w, `<h2>assessment failed</h2><p class="err verbatim">%s</p>`,
-		template.HTMLEscapeString(err.Error()))
+	fmt.Fprintf(w, `<h2>assessment failed</h2><p class="err verbatim">%s</p>`, escape(err.Error()))
 }
+
+// escape is html/template's escaper, for the two places that build a fragment with fmt rather
+// than through a template. Both render text that can quote form input or a vendor's response.
+func escape(s string) string { return template.HTMLEscapeString(s) }
 
 // parseCPEs splits and validates the CPE override field, returning the accepted CPEs and any
 // entries that were not well-formed.

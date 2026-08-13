@@ -88,6 +88,17 @@ type Request struct {
 	// behind is not. It clears nothing, so an analyst's manual entries cannot be caught up in
 	// it (spec §11).
 	NoCache bool
+
+	// OnResolved and OnSection report progress, for a front-end that shows the assessment
+	// arriving rather than waiting for all of it. Both are optional.
+	//
+	// Both are called from the goroutine that called Run, in order, never concurrently — so an
+	// observer may write to one connection without a lock. OnResolved fires first and exactly
+	// once, before any section; resolution is the weakest link in the system and there is no
+	// reason to make an analyst wait for the slowest source to see the mapping everything else
+	// was derived from. OnSection fires once per source, in completion order.
+	OnResolved func(Result)
+	OnSection  func(sources.Section)
 }
 
 // Result is one finished assessment, plus how it was arrived at.
@@ -96,6 +107,9 @@ type Request struct {
 // system, and whether a mapping was re-derived or read from a 720h-old row changes what the
 // numbers under it mean.
 type Result struct {
+	// Query is carried here rather than read off Report, because Report is nil during the
+	// OnResolved callback and every consumer needs to know what was asked either way.
+	Query      sources.Query
 	Report     *Report
 	Resolution sources.Resolution
 	// Entity is the resolved entity after overrides, which is what the sources were actually
@@ -140,6 +154,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	result := Result{
+		Query:            req.Query,
 		Resolution:       resolution,
 		Entity:           resolution.Entity,
 		ResolutionCached: resolutionCached,
@@ -154,8 +169,18 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		result.Entity.CPEs = req.CPEs
 	}
 
-	result.Report = New(r.registerSources(req.NoCache), r.cfg.Timeouts.PerSource.Duration(),
-		WithSourceTimeout(sources.SourceResearch, r.cfg.Timeouts.Research.Duration())).
+	// Announced before the fan-out: every section below is derived from this mapping, and a
+	// wrong CPE silently returns another vendor's CVEs (spec §15). Report is still nil here,
+	// which is what tells an observer this is the interim call.
+	if req.OnResolved != nil {
+		req.OnResolved(result)
+	}
+
+	opts := []Option{WithSourceTimeout(sources.SourceResearch, r.cfg.Timeouts.Research.Duration())}
+	if req.OnSection != nil {
+		opts = append(opts, WithObserver(req.OnSection))
+	}
+	result.Report = New(r.registerSources(req.NoCache), r.cfg.Timeouts.PerSource.Duration(), opts...).
 		Run(ctx, req.Query, result.Entity)
 
 	// After the fan-out, not before: caching the mapping is gated on what NVD made of it.

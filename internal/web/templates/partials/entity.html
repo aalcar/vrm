@@ -1,0 +1,64 @@
+{{- /*
+  The resolved entity, defined on its own because the stream sends it before any section
+  exists. Entity resolution is the weakest link in the system and everything below is derived
+  from it, so it is worth showing the moment it is known rather than at the end (spec §15).
+*/ -}}
+{{define "entity.html" -}}
+<h2>resolved entity</h2>
+<p class="hint">
+  Entity resolution is the weakest link in the system: a wrong CPE silently returns another
+  vendor's CVEs and nothing fails. This is the mapping the sections below were built from.
+</p>
+<dl class="facts">
+  <dt>canonical</dt><dd>{{.Entity.CanonicalName}}</dd>
+  <dt>domains</dt>
+  <dd>{{template "list" .Entity.Domains}}{{if .DomainOverridden}} <span class="hint">(overridden)</span>{{end}}</dd>
+  <dt>cpes</dt>
+  <dd>
+    <span class="mono">{{template "list" .Entity.CPEs}}</span>
+    {{- if .CPEsOverridden}} <span class="hint">(overridden)</span>{{end}}
+    {{- /* An override supersedes the origin: what the model proposed is no longer what was
+           queried, so explaining its provenance would describe a value not on this page. */ -}}
+    {{if and .Resolution.CPEOrigin (not .CPEsOverridden)}}<div class="hint">{{.Resolution.CPEOrigin}}</div>{{end}}
+  </dd>
+  <dt>packages</dt><dd>{{template "list" .PackageNames}}</dd>
+  <dt>aliases</dt><dd>{{template "list" .Entity.Aliases}}</dd>
+  {{- /* A silently discarded identifier is indistinguishable from a vendor that has none. */ -}}
+  {{if .Resolution.Dropped}}
+  <dt>dropped</dt>
+  <dd>{{range .Resolution.Dropped}}<div class="dropped">{{.}}</div>{{end}}</dd>
+  {{end}}
+  {{if .ResolutionCached}}
+  <dt></dt><dd class="hint">cached mapping — tick “re-query” to resolve again</dd>
+  {{end}}
+</dl>
+{{- end}}
+
+{{- /*
+  One section. Used by the finished report and by the stream, so a section cannot look one way
+  while it is arriving and another once everything has landed.
+*/ -}}
+{{define "section" -}}
+{{- $sec := .Row.Section}}
+<section class="src">
+  <header>
+    <h3>{{$sec.Source}}</h3>
+    <span class="tag {{.Row.Outcome.Slug}}">{{.Row.Outcome}}</span>
+    {{- /* The marker only. Spec §11 makes fetched_at internal bookkeeping. */ -}}
+    {{if $sec.Cached}}<span class="cached">cached</span>{{end}}
+  </header>
+  <div class="body">
+    {{- if eq $sec.Status "failed"}}
+      <p class="err verbatim">{{$sec.Err}}</p>
+    {{- else if eq $sec.Status "skipped"}}
+      <p class="verbatim">{{$sec.Note}}</p>
+    {{- else}}
+      {{template "data" dict "Section" $sec "Full" .Full}}
+    {{- end}}
+  </div>
+</section>
+{{- end}}
+
+{{- /* The stream's wrapper. Separate name so the handler names an intent rather than a
+       partial, and so a future streamed decoration lands in one place. */ -}}
+{{define "streamed-section.html"}}{{template "section" .}}{{end}}

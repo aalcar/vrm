@@ -15,7 +15,8 @@ criterion explicitly — not "looks good," but which criterion is satisfied by w
 **Do not run `git commit` or `git add`.** When a commit's worth of work is finished, say so
 and stop; the analyst reviews and commits. Suggesting a message is welcome.
 
-Phases 0–11 are complete. Phase 12 (SSE progress streaming) is next.
+Phases 0–12 are complete — the whole spec. There is no next phase; new work needs a decision
+about scope before it needs code.
 
 **FedRAMP broke and recovered inside a day (2026-08-05).** The marketplace listing served a
 39 KB client-rendered SvelteKit shell for part of that day and `fedramp` failed loudly on
@@ -195,6 +196,21 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   the previous report on screen with nothing to say the new run failed. `web.fail` takes no
   status argument for this reason: when it did, one call site passed 400 and its error message
   silently never reached the page.
+- **The observer runs on the collector's goroutine, never a source's.** `WithObserver` is called
+  from the fan-out's collect loop, which is what lets an SSE handler write to one connection
+  without a lock. Moving that call into the per-source goroutines would hand every observer a
+  concurrency bug silently. It fires for expired sources too, and a panicking observer is
+  contained: a progress view must not be able to kill the assessment it describes.
+- **An SSE payload is split across `data:` lines.** A bare newline terminates a field in the
+  wire format, so a multi-line HTML fragment written as one `data:` line arrives truncated at
+  its first line break — and every fragment this server sends is multi-line. The failure is
+  quiet in the worst way: connection open, event count right, every section missing everything
+  below its opening tag.
+- **`assess.Result.Report` is nil until the fan-out finishes.** The `OnResolved` callback fires
+  between resolution and the first source, so anything reading a Result must tolerate it —
+  `Result.Query` exists for exactly this reason. A first pass read `res.Report.Query` and
+  panicked on the first live request, inside a handler that had already sent 200 and could not
+  report it.
 - **No editorializing.** Record values and citations. Severity judgments, timelines, and
   narrative are the analyst's job, not generated output.
 - **`html/template` only**, never `text/template`. Report data is externally sourced and

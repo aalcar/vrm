@@ -15,6 +15,10 @@
 <script src="https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js"
         integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"
         crossorigin="anonymous"></script>
+<!-- The SSE extension, pinned and hashed the same way (htmx-ext-sse 2.2.4, 8921 bytes). -->
+<script src="https://unpkg.com/htmx-ext-sse@2.2.4/dist/sse.js"
+        integrity="sha384-QA9wXqexhwzXTuTvuF5QP82pddm3R2hy81UzXi7ioNTqNF2b75hlkkSGjafohhL3"
+        crossorigin="anonymous"></script>
 <style>{{template "style.css"}}</style>
 </head>
 <body>
@@ -65,7 +69,7 @@
 
     <button type="submit">Assess</button>
     <span id="running" class="htmx-indicator">
-      running — a fresh assessment takes about 30s, longer with research…
+      resolving…
     </span>
   </form>
 

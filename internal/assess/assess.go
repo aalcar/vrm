@@ -83,6 +83,9 @@ type Assessor struct {
 	// override the shared timeout has to be raised to suit the slowest source, which stops
 	// it doing its job for all the others.
 	sourceTimeouts map[string]time.Duration
+	// observe is notified as each section lands, for a front-end that shows progress rather
+	// than waiting for the whole report.
+	observe func(sources.Section)
 }
 
 // Option configures an Assessor.
@@ -99,6 +102,20 @@ func WithSourceTimeout(name string, d time.Duration) Option {
 		}
 		a.sourceTimeouts[name] = d
 	}
+}
+
+// WithObserver is notified as each section lands, in completion order.
+//
+// Called from the collector loop — the same goroutine that called Run — never from a source's
+// own goroutine. That is what makes it safe for an observer to write to a single connection
+// without a lock, and it is a promise this package has to keep: moving the call into the
+// per-source goroutines would silently hand every observer a concurrency bug.
+//
+// It is called for expired sources too. A source the budget ran out on has a section like any
+// other, and a progress view that simply stopped mentioning it would be the worst of both —
+// no result and no explanation.
+func WithObserver(f func(sources.Section)) Option {
+	return func(a *Assessor) { a.observe = f }
 }
 
 // New builds an Assessor. A non-positive timeout means no per-source deadline beyond
@@ -184,6 +201,7 @@ func (a *Assessor) fanOut(ctx context.Context, q sources.Query, ent sources.Reso
 		case r := <-pending:
 			reported[r.index] = true
 			results = append(results, r)
+			a.notify(r.section)
 
 		case <-ctx.Done():
 			// Collect anything already delivered before writing the rest off. A result
@@ -196,6 +214,7 @@ func (a *Assessor) fanOut(ctx context.Context, q sources.Query, ent sources.Reso
 				case r := <-pending:
 					reported[r.index] = true
 					results = append(results, r)
+					a.notify(r.section)
 				default:
 					break drain
 				}
@@ -210,10 +229,25 @@ func (a *Assessor) fanOut(ctx context.Context, q sources.Query, ent sources.Reso
 func (a *Assessor) expireOutstanding(results []result, reported map[int]bool, err error) []result {
 	for i, src := range a.sources {
 		if !reported[i] {
-			results = append(results, result{index: i, section: expired(src.Name(), err)})
+			section := expired(src.Name(), err)
+			results = append(results, result{index: i, section: section})
+			a.notify(section)
 		}
 	}
 	return results
+}
+
+// notify hands one section to the observer, if there is one.
+//
+// A panicking observer is contained here for the same reason a panicking source is contained
+// in runOne: a progress view is a convenience, and it must not be able to take down the
+// assessment it is describing.
+func (a *Assessor) notify(section sources.Section) {
+	if a.observe == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	a.observe(section)
 }
 
 // expired builds the section for a source that never reported inside the budget.
