@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/aalcar/vrm/internal/assess"
 	"github.com/aalcar/vrm/internal/config"
@@ -21,10 +20,6 @@ import (
 	"github.com/aalcar/vrm/internal/sources"
 	"github.com/aalcar/vrm/internal/store"
 )
-
-// cacheWriteTimeout bounds recording the resolution. Short on purpose: the mapping is already
-// in hand, and a slow database must not become a slow assessment.
-const cacheWriteTimeout = 5 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -152,162 +147,29 @@ func runAssess(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// The total budget bounds the whole assessment, resolution included — it is one
-	// assessment, and a run that spent its time resolving has still spent it. Every
-	// per-source deadline derives from this, so they clamp to whatever remains rather than
-	// each getting a fresh budget.
-	ctx, cancelTotal := context.WithTimeout(ctx, cfg.Timeouts.Total.Duration())
-	defer cancelTotal()
+	cpes, bad := parseCPEOverrides(*cpeFlag)
+	if len(bad) > 0 {
+		// Refuse rather than quietly querying fewer CPEs than asked for: a dropped override
+		// would look identical to a vendor with nothing to find.
+		return fmt.Errorf("--cpe: not a well-formed CPE 2.3 string: %s", strings.Join(bad, ", "))
+	}
 
-	q := sources.Query{Company: company, Service: *service}
-
-	// One NVD, used twice: entity resolution reads its CPE dictionary, then the fan-out
-	// queries it for CVEs. They must be the same instance — the rate limiter lives on it, and
-	// two limiters sharing NVD's five-requests-per-thirty-seconds budget would earn a 403.
-	nvd := newNVD(cfg, secrets)
-
-	resolution, resolutionCached, err := resolve(ctx, cfg, secrets, st, q, *noCache, nvd)
+	runner := assess.NewRunner(cfg, secrets, st, assess.WithWarner(warnCache))
+	result, err := runner.Run(ctx, assess.Request{
+		Query:   sources.Query{Company: company, Service: *service},
+		Domain:  *domain,
+		CPEs:    cpes,
+		NoCache: *noCache,
+	})
 	if err != nil {
-		// Fatal, unlike a source failure. Every deterministic source keys off the resolved
-		// entity, so continuing would produce a report in which everything skipped — and
-		// that reads as "nothing to report" rather than "resolution broke".
 		return fmt.Errorf("%w\n\nPass --domain to supply the vendor domain and skip resolution", err)
 	}
 
-	ent := resolution.Entity
-	overridden := strings.TrimSpace(*domain) != ""
-	if overridden {
-		// Analyst override, so a bad mapping can be corrected without editing code.
-		ent.Domains = []string{strings.TrimSpace(*domain)}
-	}
-
-	cpesOverridden := strings.TrimSpace(*cpeFlag) != ""
-	if cpesOverridden {
-		cpes, bad := parseCPEOverrides(*cpeFlag)
-		if len(bad) > 0 {
-			// Refuse rather than quietly querying fewer CPEs than asked for: a dropped
-			// override would look identical to a vendor with nothing to find.
-			return fmt.Errorf("--cpe: not a well-formed CPE 2.3 string: %s",
-				strings.Join(bad, ", "))
-		}
-		ent.CPEs = cpes
-	}
-
-	assessment := assess.New(registerSources(cfg, secrets, st, *noCache, nvd), cfg.Timeouts.PerSource.Duration(),
-		assess.WithSourceTimeout(sources.SourceResearch, cfg.Timeouts.Research.Duration())).
-		Run(ctx, q, ent)
-
-	// After the fan-out, not before: caching the mapping is gated on what NVD made of it.
-	if !resolutionCached {
-		recordResolution(ctx, cfg, st, q, resolution, assessment, cpesOverridden)
-	}
-
-	return report.Render(os.Stdout, report.Report{
-		Query:            q,
-		Entity:           ent,
-		Resolution:       resolution,
-		Sections:         assessment.Sections,
-		CacheKey:         [2]string{store.NormalizeKey(q.Company), store.NormalizeKey(q.Service)},
-		DomainOverridden: overridden,
-		CPEsOverridden:   cpesOverridden,
-		ResolutionCached: resolutionCached,
-		ConfigPath:       *configPath,
-		ResolutionModel:  cfg.Models.Resolution,
-		ResearchModel:    cfg.Models.Research,
-		AutomatedSources: cfg.EnabledSources(),
-		ManualSources:    manualNames(cfg),
-		NVDKeyPresent:    secrets.HasNVDKey(),
-		NoCache:          *noCache,
-		Full:             *full,
-		Color:            useColor(os.Stdout),
-	})
-}
-
-// resolve returns the entity mapping, from cache when one is fresh, and reports which it was.
-//
-// Resolution is cached separately from the sources rather than through the same decorator: it
-// is not a Source, it runs before the fan-out, and a failure here is fatal to the run where a
-// source failure is not.
-func resolve(
-	ctx context.Context,
-	cfg *config.Config,
-	secrets *config.Secrets,
-	st *store.Store,
-	q sources.Query,
-	noCache bool,
-	nvd *sources.NVD,
-) (sources.Resolution, bool, error) {
-	ttl, cacheable := cfg.TTL(sources.ResolutionKey)
-
-	if cacheable && !noCache {
-		res, hit, err := st.CachedResolution(ctx, q.Company, q.Service, ttl)
-		switch {
-		case err != nil:
-			// A sick cache costs a slow answer, never no answer.
-			warnCache(fmt.Errorf("resolution: %w", err))
-		case hit:
-			return res, true, nil
-		}
-	}
-
-	opts := []sources.ResolverOption{}
-	if nvd != nil {
-		// A typed nil would satisfy the interface and panic on first use, so the check is on
-		// the concrete pointer and the option is only added when there is something behind it.
-		opts = append(opts, sources.WithCPEDirectory(nvd))
-	}
-	resolver := sources.NewResolver(secrets.AnthropicAPIKey, cfg.Models.Resolution, opts...)
-
-	resCtx, cancel := context.WithTimeout(ctx, cfg.Timeouts.ResolutionTimeout())
-	defer cancel()
-
-	res, err := resolver.Resolve(resCtx, q)
-	if err != nil {
-		return res, false, err
-	}
-
-	return res, false, nil
-}
-
-// recordResolution caches a freshly resolved entity, but only once NVD has had its say.
-//
-// The write waits for the fan-out because the question "are these CPEs real" is answered by
-// the source that consumes them, and that answer only exists after it has run. Resolving and
-// caching in one step would pin the mapping before anything had checked it — which is how a
-// CPE the model invented ends up as the assessment's answer for the next 720h.
-func recordResolution(
-	ctx context.Context,
-	cfg *config.Config,
-	st *store.Store,
-	q sources.Query,
-	res sources.Resolution,
-	report *assess.Report,
-	cpesOverridden bool,
-) {
-	if _, cacheable := cfg.TTL(sources.ResolutionKey); !cacheable {
-		return
-	}
-	// The verdict below belongs to the analyst's CPEs, not the model's. Letting an override
-	// earn the model's mapping a place in the cache would cache a mapping nothing checked.
-	if cpesOverridden || !res.Cacheable() {
-		return
-	}
-	// A verdict of "invented" is the one answer that blocks the write. No verdict — NVD
-	// disabled, or unable to answer this run — falls back to the presence rule: an
-	// unvalidated CPE that turns out wrong produces a loud failed section on every later
-	// run, where an absent one produced a silent skip.
-	if verified, known := report.CPEsVerified(); known && !verified {
-		return
-	}
-
-	// Its own context, for the same reason a source's cache write gets one: the answer is
-	// already in hand and must not be lost to the clock that bounded obtaining it.
-	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cacheWriteTimeout)
-	defer cancel()
-
-	if err := st.PutResolution(writeCtx, q.Company, q.Service, res); err != nil {
-		warnCache(fmt.Errorf("resolution: %w", err))
-	}
+	return report.Render(os.Stdout, report.FromResult(result, runner, report.Presentation{
+		ConfigPath: *configPath,
+		Full:       *full,
+		Color:      useColor(os.Stdout),
+	}))
 }
 
 // parseCPEOverrides splits and validates the --cpe flag, returning the accepted CPEs and
@@ -368,7 +230,7 @@ func runSet(ctx context.Context, args []string) error {
 		return m.Name == *source
 	}) {
 		return fmt.Errorf("unknown manual source %q; configured manual sources are: %s",
-			*source, strings.Join(manualNames(cfg), ", "))
+			*source, strings.Join(cfg.ManualNames(), ", "))
 	}
 
 	secrets, err := config.LoadSecrets()
@@ -393,89 +255,6 @@ func runSet(ctx context.Context, args []string) error {
 		*source, store.NormalizeKey(company), store.NormalizeKey(*service))
 	fmt.Printf("  %s\n", *value)
 	return nil
-}
-
-// manualNames lists the configured manual sources in config order.
-func manualNames(cfg *config.Config) []string {
-	names := make([]string, 0, len(cfg.ManualSources))
-	for _, m := range cfg.ManualSources {
-		names = append(names, m.Name)
-	}
-	return names
-}
-
-// newNVD builds the single NVD instance for this run, or nil when the source is switched off.
-//
-// Nil rather than an unused instance: with nvd disabled there is nothing to query and nothing
-// to check CPEs against, and resolution must be told that rather than handed a client whose
-// answers would never be read.
-func newNVD(cfg *config.Config, secrets *config.Secrets) *sources.NVD {
-	if !cfg.Sources[sources.SourceNVD] {
-		return nil
-	}
-	// The key is optional — it raises NVD's rate limit rather than granting access — so NVD
-	// is built whether or not one is present.
-	return sources.NewNVD(secrets.NVDAPIKey, sources.WithNVDResultsPerCPE(cfg.NVD.ResultsPerCPE))
-}
-
-// registerSources builds the source list from config. A source toggled off in config.yaml is
-// not registered at all, so it produces no section rather than a skipped one.
-func registerSources(
-	cfg *config.Config,
-	secrets *config.Secrets,
-	st *store.Store,
-	noCache bool,
-	nvd *sources.NVD,
-) []sources.Source {
-	// cached wraps an automated source in its configured TTL. A source with no cache_ttl
-	// entry comes back unwrapped, so an omitted line means "do not cache" rather than
-	// something halfway.
-	cached := func(src sources.Source) sources.Source {
-		ttl, ok := cfg.TTL(src.Name())
-		if !ok {
-			return src
-		}
-		return sources.Caching(src, st, ttl,
-			sources.WithCacheBypass(noCache),
-			sources.WithCacheWarner(warnCache))
-	}
-
-	var srcs []sources.Source
-	if cfg.Sources[sources.SourceBitSight] {
-		srcs = append(srcs, cached(sources.NewBitSight(secrets.BitsightAPIKey)))
-	}
-	if nvd != nil {
-		// Built by newNVD and already handed to entity resolution, so both uses share one
-		// rate limiter. cfg.Sources decided whether it exists at all.
-		srcs = append(srcs, cached(nvd))
-	}
-	if cfg.Sources[sources.SourceOSV] {
-		// OSV is free and unauthenticated.
-		srcs = append(srcs, cached(sources.NewOSV()))
-	}
-	if cfg.Sources[sources.SourceFedRAMP] {
-		// A public listing, read passively. No credential.
-		srcs = append(srcs, cached(sources.NewFedRAMP()))
-	}
-	if cfg.Sources[sources.SourceCAAG] {
-		srcs = append(srcs, cached(sources.NewCAAG()))
-	}
-	if cfg.Sources[sources.SourceResearch] {
-		// The second LLM job, and the only one that runs inside the fan-out. It skips
-		// itself when the key is absent rather than failing the assessment.
-		srcs = append(srcs, cached(
-			sources.NewResearcher(secrets.AnthropicAPIKey, cfg.Models.Research)))
-	}
-	// Manual sources are never wrapped. They are analyst data read fresh from their own row
-	// every run, and they never expire (spec §7).
-	//
-	// Manual sources are not toggled by cfg.Sources: they are checklist categories that
-	// must appear in every report, answered or not, so that a category an analyst has yet
-	// to check never silently drops off the assessment (spec §3, §7).
-	for _, m := range cfg.ManualSources {
-		srcs = append(srcs, sources.NewManual(m.Name, m.Instruction, m.URL, st))
-	}
-	return srcs
 }
 
 // useColor reports whether to emit ANSI escapes.

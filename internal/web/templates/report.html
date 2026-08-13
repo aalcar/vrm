@@ -1,0 +1,94 @@
+{{define "report.html" -}}
+{{- /*
+  The partial HTMX swaps into #report. Everything below is auto-escaped by html/template,
+  which is the whole reason spec §4 forbids text/template here: every value on this page came
+  from a vendor API, a scraped page, or a language model. Nothing is ever wrapped in
+  template.HTML — multi-line values are handled with CSS (.verbatim), not by trusting them.
+*/ -}}
+{{- $r := . -}}
+{{- $s := .Summarize -}}
+
+<h2>resolved entity</h2>
+<p class="hint">
+  Entity resolution is the weakest link in the system: a wrong CPE silently returns another
+  vendor's CVEs and nothing fails. This is the mapping the sections below were built from.
+</p>
+<dl class="facts">
+  <dt>canonical</dt><dd>{{.Entity.CanonicalName}}</dd>
+  <dt>domains</dt>
+  <dd>{{template "list" .Entity.Domains}}{{if .DomainOverridden}} <span class="hint">(overridden)</span>{{end}}</dd>
+  <dt>cpes</dt>
+  <dd>
+    <span class="mono">{{template "list" .Entity.CPEs}}</span>
+    {{- if .CPEsOverridden}} <span class="hint">(overridden)</span>{{end}}
+    {{- /* An override supersedes the origin: what the model proposed is no longer what was
+           queried, so explaining its provenance would describe a value not on this page. */ -}}
+    {{if and .Resolution.CPEOrigin (not .CPEsOverridden)}}<div class="hint">{{.Resolution.CPEOrigin}}</div>{{end}}
+  </dd>
+  <dt>packages</dt><dd>{{template "list" .PackageNames}}</dd>
+  <dt>aliases</dt><dd>{{template "list" .Entity.Aliases}}</dd>
+  {{- /* A silently discarded identifier is indistinguishable from a vendor that has none. */ -}}
+  {{if .Resolution.Dropped}}
+  <dt>dropped</dt>
+  <dd>{{range .Resolution.Dropped}}<div class="dropped">{{.}}</div>{{end}}</dd>
+  {{end}}
+  {{if .ResolutionCached}}
+  <dt></dt><dd class="hint">cached mapping — tick “re-query” to resolve again</dd>
+  {{end}}
+</dl>
+
+<h2>summary</h2>
+<p class="summary-counts">
+  {{$s.Total}} {{if eq $s.Total 1}}category{{else}}categories{{end}}:
+  <b>{{len $s.OK}}</b> answered,
+  <b>{{len $s.Failed}}</b> failed,
+  <b>{{len $s.Unanswered}}</b> unanswered,
+  <b>{{len $s.Awaiting}}</b> awaiting a manual check
+</p>
+{{- /* Only the buckets that have something in them: an assessment with no problems should
+       look like one. */ -}}
+<ul class="buckets">
+  {{if $s.Failed}}<li><span class="tag failed">failed</span> {{template "join" $s.Failed}}</li>{{end}}
+  {{if $s.Unanswered}}<li><span class="tag unanswered">unanswered</span> {{template "join" $s.Unanswered}}</li>{{end}}
+  {{if $s.Awaiting}}<li><span class="tag awaiting">awaiting manual check</span> {{template "join" $s.Awaiting}}</li>{{end}}
+</ul>
+
+<h2>sections</h2>
+{{range .Rows}}
+{{- $sec := .Section}}
+<section class="src">
+  <header>
+    <h3>{{$sec.Source}}</h3>
+    <span class="tag {{.Outcome.Slug}}">{{.Outcome}}</span>
+    {{- /* The marker only. Spec §11 makes fetched_at internal bookkeeping. */ -}}
+    {{if $sec.Cached}}<span class="cached">cached</span>{{end}}
+  </header>
+  <div class="body">
+    {{- if eq $sec.Status "failed"}}
+      <p class="err verbatim">{{$sec.Err}}</p>
+    {{- else if eq $sec.Status "skipped"}}
+      <p class="verbatim">{{$sec.Note}}</p>
+    {{- else}}
+      {{template "data" dict "Section" $sec "Full" $r.Full}}
+    {{- end}}
+  </div>
+</section>
+{{end}}
+
+<h2>config</h2>
+<dl class="facts">
+  <dt>file</dt><dd class="mono">{{.ConfigPath}}</dd>
+  <dt>models</dt><dd>resolution={{.ResolutionModel}} research={{.ResearchModel}}</dd>
+  <dt>automated</dt><dd>{{template "join" .AutomatedSources}}</dd>
+  <dt>manual</dt><dd>{{template "join" .ManualSources}}</dd>
+  <dt>NVD key</dt><dd>{{if .NVDKeyPresent}}set{{else}}absent (source will be skipped){{end}}</dd>
+  {{if .NoCache}}<dt></dt><dd class="hint">re-queried; manual entries untouched</dd>{{end}}
+  <dt>cache key</dt><dd class="mono">{{index .CacheKey 0}} / {{index .CacheKey 1}}</dd>
+</dl>
+{{- end}}
+
+{{- /* list renders a slice, or an explicit "(none)" — a blank reads as a missing line
+       rather than as an answer. */ -}}
+{{define "list"}}{{if .}}{{template "join" .}}{{else}}<span class="none">(none)</span>{{end}}{{end}}
+
+{{define "join"}}{{range $i, $v := .}}{{if $i}}, {{end}}{{$v}}{{end}}{{end}}

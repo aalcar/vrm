@@ -16,7 +16,8 @@ anything. [`CLAUDE.md`](CLAUDE.md) covers invariants and workflow.
 
 ## Status
 
-**Phases 0–10 complete**; Phase 11 (web UI) is next. See spec §13 for the full phased plan.
+**Phases 0–11 complete**; Phase 12 (SSE progress streaming) is next. See spec §13 for the
+full phased plan.
 
 `vrm assess` today resolves a company + service to machine identifiers via the Anthropic
 API, queries every source below concurrently, and prints a sourced report. Successful
@@ -24,7 +25,8 @@ sections and the entity resolution are cached in Postgres under per-source TTLs,
 assessment inside the TTL takes 0.05s against roughly 30s for a fresh one. `--no-cache`
 forces fresh calls; analyst-recorded manual entries never expire and are never cleared by it.
 
-There is no web UI yet (Phase 11).
+Both front-ends run the same pipeline (`internal/assess.Runner`) and label sections from the
+same code (`internal/report`), so a skip means the same thing in a terminal and a browser.
 
 | Source | Keyed on | State |
 |---|---|---|
@@ -35,6 +37,21 @@ There is no web UI yet (Phase 11).
 | CA Attorney General | company name | ✅ California-reported breaches (scrape) |
 | LLM research | company + service | ✅ fixed checklist, every claim cited (max 2 sources each) |
 | CVE Details / SSL Labs / Open Bug Bounty | — | ✅ manual, by design — `vrm set` |
+
+## Web UI
+
+```bash
+go run ./cmd/vrmd            # listens on config.yaml's `listen` (:8080), or pass --listen
+```
+
+A form and a report, server-rendered with `html/template` and swapped in by HTMX. Every value
+on the page came from a vendor API, a scraped page, or a language model, so nothing is ever
+wrapped in `template.HTML` — multi-line values are handled with CSS. There is no auth and no
+TLS termination by design (spec §2); run it on localhost or behind something that has them.
+
+A fresh assessment blocks the request for ~30s and the server sets no `WriteTimeout`, because
+any value not larger than `timeouts.total` would truncate the most expensive reports mid-HTML
+with a 200 already sent. Phase 12 replaces the wait with streamed sections.
 
 ## Setup
 
@@ -142,11 +159,14 @@ stop for review.
 The core is a library; the interfaces are thin front-ends over it.
 
 - `cmd/vrm` — CLI (`assess`, `set`)
-- `cmd/vrmd` — web server (Go `html/template` + HTMX, SSE progress) — Phase 11
-- `internal/assess` — orchestrator: resolve → fan-out → aggregate
+- `cmd/vrmd` — web server (Go `html/template` + HTMX); SSE progress is Phase 12
+- `internal/assess` — the pipeline: resolve → fan-out → aggregate → record. Both front-ends
+  call `Runner.Run`; it owns the single shared `*sources.NVD`
 - `internal/sources` — one file per source, all behind a common `Source` interface
 - `internal/store` — Postgres cache and analyst-supplied manual entries
-- `internal/report` — the renderer, pinned by golden files in `internal/report/testdata`
+- `internal/report` — the terminal renderer and the outcome/summary logic both UIs share,
+  pinned by golden files in `internal/report/testdata`
+- `internal/web` — handlers and embedded templates for the browser
 
 Data sources are a **fixed** set (spec §6 and §7). Every automated source is a passive
 lookup against an existing database — `vrm` never scans or probes vendor infrastructure.

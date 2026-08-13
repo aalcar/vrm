@@ -15,7 +15,7 @@ criterion explicitly — not "looks good," but which criterion is satisfied by w
 **Do not run `git commit` or `git add`.** When a commit's worth of work is finished, say so
 and stop; the analyst reviews and commits. Suggesting a message is welcome.
 
-Phases 0–10 are complete. Phase 11 (web UI) is next.
+Phases 0–11 are complete. Phase 12 (SSE progress streaming) is next.
 
 **FedRAMP broke and recovered inside a day (2026-08-05).** The marketplace listing served a
 39 KB client-rendered SvelteKit shell for part of that day and `fedramp` failed loudly on
@@ -96,11 +96,13 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   selection. The default is slower and answers fewer fields; `medium` returned an empty
   checklist twice in five runs where `low` never did in eighteen. Never leave it to an API
   default nobody chose.
-- **One `*sources.NVD`, built in `main` and shared.** Entity resolution reads its CPE
+- **One `*sources.NVD`, built once in the `Runner` and shared.** Entity resolution reads its CPE
   dictionary and the fan-out queries it for CVEs. The rate limiter is a field on that struct,
   so two instances mean two limiters splitting one 5-req/30s budget, and a 403 that looks
   like a credential problem. `nvd: false` in config means resolution gets no directory and
-  labels its CPEs unchecked — never a second instance built to fill the gap.
+  labels its CPEs unchecked — never a second instance built to fill the gap. The web server
+  makes this sharper, not looser: one Runner serves every request, so two concurrent
+  assessments share the one limiter rather than each building their own.
 - **Uncited claims are dropped, not displayed.** A `yes` without a citation naming this
   specific vendor is downgraded to `no_evidence_found` by the parser.
 - **Partial failure is normal.** One source failing marks that section only. Never cancel
@@ -177,6 +179,22 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   earlier. Telling an analyst to check `BITSIGHT_API_KEY` there sends them to rotate something
   that is working. It stays `StatusFailed` rather than becoming a skip: the rating exists and
   applies to this vendor, so it is "could not look", never "nothing to find".
+- **Both front-ends label a section the same way.** Outcome labels, the summary buckets and the
+  cache markers come from `report.Rows`/`report.Summarize`, which the terminal renderer and the
+  HTML templates both call. A second renderer deciding for itself what a skip means will
+  eventually disagree with the first, and an analyst comparing a browser tab against a terminal
+  is the last person who should discover it.
+- **Never `template.HTML`, and never guess an SRI hash.** Every value on the page came from a
+  vendor API, a scraped page, or a model; `template.HTML` switches off the one thing that makes
+  displaying it safe, so a multi-line value is handled with CSS (`white-space: pre-wrap`)
+  instead. The HTMX `<script>` is pinned to an exact version with a hash computed from the file
+  unpkg actually served — a floating `@2` with SRI breaks the page on the next release, and an
+  exact version without one lets a compromised CDN run anything it likes in a page full of
+  vendor-controlled text.
+- **An HTMX error response is 200.** HTMX does not swap a non-2xx by default, so a 400 leaves
+  the previous report on screen with nothing to say the new run failed. `web.fail` takes no
+  status argument for this reason: when it did, one call site passed 400 and its error message
+  silently never reached the page.
 - **No editorializing.** Record values and citations. Severity judgments, timelines, and
   narrative are the analyst's job, not generated output.
 - **`html/template` only**, never `text/template`. Report data is externally sourced and

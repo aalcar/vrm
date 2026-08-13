@@ -1,0 +1,76 @@
+{{define "form.html" -}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vrm — vendor risk assessment</title>
+<!--
+  Pinned to an exact version with a subresource-integrity hash computed from the file unpkg
+  actually served (51238 bytes, htmx 2.0.10). Both halves matter: a floating "@2" with an SRI
+  hash breaks the whole page the day unpkg publishes 2.0.11, and an exact version without one
+  means a compromised CDN executes anything it likes in a page rendering vendor-controlled
+  text. CDN delivery is spec §4's choice; the cost is that the form needs the network.
+-->
+<script src="https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js"
+        integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"
+        crossorigin="anonymous"></script>
+<style>{{template "style.css"}}</style>
+</head>
+<body>
+<main>
+  <h1>vrm</h1>
+  <p class="lede">
+    Vendor risk assessment. Decision-support, not a decision-maker — it surfaces sourced
+    facts so an analyst can decide.
+  </p>
+
+  <form hx-post="/assess" hx-target="#report" hx-swap="innerHTML"
+        hx-indicator="#running" hx-disabled-elt="find button">
+    <div class="row">
+      <label for="company">Company</label>
+      <input id="company" name="company" required autofocus
+             placeholder="Okta" autocomplete="off">
+    </div>
+    <div class="row">
+      <label for="service">Service</label>
+      <input id="service" name="service" required
+             placeholder="SSO" autocomplete="off">
+    </div>
+
+    <details>
+      <summary>Overrides</summary>
+      <p class="hint">
+        Entity resolution is the weakest link here — a wrong CPE silently returns another
+        vendor's CVEs. The resolved identifiers appear above the results; these correct them
+        without editing code.
+      </p>
+      <div class="row">
+        <label for="domain">Domain</label>
+        <input id="domain" name="domain" placeholder="okta.com" autocomplete="off">
+      </div>
+      <div class="row">
+        <label for="cpe">CPEs</label>
+        <input id="cpe" name="cpe" autocomplete="off"
+               placeholder="cpe:2.3:a:okta:verify, cpe:2.3:a:okta:access_gateway">
+      </div>
+      <div class="row">
+        <label for="no_cache">Re-query</label>
+        <span class="check">
+          <input id="no_cache" name="no_cache" type="checkbox" value="1">
+          <span class="hint">Skip the cache. Recorded manual entries are never cleared.</span>
+        </span>
+      </div>
+    </details>
+
+    <button type="submit">Assess</button>
+    <span id="running" class="htmx-indicator">
+      running — a fresh assessment takes about 30s, longer with research…
+    </span>
+  </form>
+
+  <div id="report"></div>
+</main>
+</body>
+</html>
+{{- end}}

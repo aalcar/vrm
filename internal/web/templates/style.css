@@ -1,0 +1,88 @@
+{{define "style.css" -}}
+/* One stylesheet, inlined into the page. No build step (spec §4), and no second request that
+   could arrive after the report and reflow it under the reader. */
+:root {
+  --fg: #1c1c1e; --muted: #6b6b70; --bg: #fdfdfc; --line: #e0e0dc;
+  --ok: #1a7f37; --failed: #b3261e; --unanswered: #8a6100; --awaiting: #0b5f8a;
+  --code: #f4f4f1;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e6e6e3; --muted: #9a9a95; --bg: #16161a; --line: #33333a;
+    --ok: #4ac26b; --failed: #ff7b72; --unanswered: #d9a441; --awaiting: #6cb6ff;
+    --code: #1e1e24;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 2rem 1rem 6rem; background: var(--bg); color: var(--fg);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 60rem; margin: 0 auto; }
+h1 { font-size: 1.4rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+h2 { font-size: 1rem; margin: 2rem 0 .5rem; text-transform: lowercase; letter-spacing: .04em; color: var(--muted); }
+.lede { color: var(--muted); margin: 0 0 1.5rem; max-width: 44rem; }
+.hint { color: var(--muted); font-size: .85rem; }
+
+form { border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.25rem 1.25rem; }
+.row { display: flex; align-items: baseline; gap: .75rem; margin: .5rem 0; }
+.row label { flex: 0 0 6rem; color: var(--muted); font-size: .9rem; }
+.row input[type=text], .row input:not([type]) { flex: 1; }
+input {
+  flex: 1; padding: .45rem .6rem; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg); color: var(--fg); font: inherit; font-size: .9rem; min-width: 0;
+}
+input[type=checkbox] { flex: 0; min-width: auto; }
+.check { display: flex; align-items: center; gap: .5rem; }
+details { margin: .75rem 0; }
+summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+button {
+  margin-top: .75rem; padding: .5rem 1.1rem; border: 1px solid var(--fg); border-radius: 5px;
+  background: var(--fg); color: var(--bg); font: inherit; font-weight: 600; cursor: pointer;
+}
+button[disabled] { opacity: .5; cursor: progress; }
+
+/* htmx toggles .htmx-request on the indicator while a request is in flight. */
+.htmx-indicator { display: none; margin-left: .75rem; color: var(--muted); font-size: .85rem; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline; }
+
+dl.facts { display: grid; grid-template-columns: 7rem 1fr; gap: .2rem .75rem; margin: 0; }
+dl.facts dt { color: var(--muted); font-size: .9rem; }
+dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+.none { color: var(--muted); }
+
+/* Values arrive from vendors, scrapers and a model, and some carry newlines the terminal
+   renderer indents. pre-wrap preserves them without template.HTML, which would switch off the
+   escaping that makes any of this safe to display. */
+.verbatim { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.tag { font-size: .75rem; font-weight: 600; letter-spacing: .03em; padding: .1rem .45rem;
+       border-radius: 3px; border: 1px solid currentColor; white-space: nowrap; }
+.ok         { color: var(--ok); }
+.failed     { color: var(--failed); }
+.unanswered { color: var(--unanswered); }
+.awaiting   { color: var(--awaiting); }
+.cached { color: var(--muted); font-size: .8rem; }
+
+.summary-counts { margin: 0 0 .4rem; }
+.summary-counts b { font-weight: 600; }
+ul.buckets { list-style: none; padding: 0; margin: 0; }
+ul.buckets li { margin: .15rem 0; font-size: .9rem; }
+
+section.src { border-top: 1px solid var(--line); padding: .75rem 0; }
+section.src > header { display: flex; align-items: center; gap: .6rem; }
+section.src > header h3 { font-size: .95rem; margin: 0; font-family: ui-monospace, monospace; }
+section.src .body { margin: .5rem 0 0 0; }
+
+table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+th, td { text-align: left; padding: .25rem .5rem .25rem 0; vertical-align: top; }
+th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+.counts { font-family: ui-monospace, monospace; font-size: .85rem; color: var(--muted); }
+.cites { list-style: none; padding: 0; margin: .2rem 0 0; }
+.cites li { font-size: .8rem; }
+a { color: inherit; }
+.err { color: var(--failed); }
+.dropped { color: var(--unanswered); font-size: .85rem; }
+{{- end}}

@@ -1,0 +1,220 @@
+{{define "data" -}}
+{{- /*
+  The type switch, done with template funcs that assert and return a pointer (nil on a
+  mismatch) so {{with}} can select on it. Doing it here rather than flattening every source
+  into a view model in Go keeps one place that decides what a section shows — the alternative
+  was a second copy of every per-source rendering decision, and the copy that drifts is the one
+  an analyst is reading.
+
+  The final {{else}} chain matters as much as the cases: a cached Section.Data that came back
+  as a map matches nothing here, and without a fallback the section would render as a heading
+  with nothing under it — a green "ok" claiming an answer it does not have.
+*/ -}}
+{{- $sec := .Section}}{{$full := .Full}}
+{{- $d := $sec.Data -}}
+{{- with bitsight $d}}{{template "bitsight" .}}{{template "cites" $sec.Citations}}
+{{- else}}{{with nvd $d}}{{template "nvd" dict "R" . "Full" $full}}
+{{- else}}{{with osv $d}}{{template "osv" dict "R" . "Full" $full}}
+{{- else}}{{with fedramp $d}}{{template "fedramp" .}}
+{{- else}}{{with caag $d}}{{template "caag" dict "R" . "Full" $full}}
+{{- else}}{{with research $d}}{{template "research" .}}
+{{- else}}{{with manual $d}}{{template "manual" .}}
+{{- else}}{{template "cites" $sec.Citations}}
+{{- end}}{{end}}{{end}}{{end}}{{end}}{{end}}{{end}}
+{{- end}}
+
+{{define "cites"}}{{if .}}<ul class="cites">{{range .}}<li><a href="{{.URL}}" rel="noreferrer noopener" target="_blank">{{if .Title}}{{.Title}}{{else}}{{.URL}}{{end}}</a></li>{{end}}</ul>{{end}}{{end}}
+
+{{- /* Deterministic values are interpolated verbatim (spec §2.2). No recomputation, no
+       judgment about what a rating means. */ -}}
+{{define "bitsight" -}}
+<dl class="facts">
+  <dt>rating</dt><dd><b>{{.Rating}}</b> ({{.RatingRange}}) as of {{.RatingDate}}</dd>
+  {{if .IndustryMedian}}<dt>vs median</dt><dd>{{.IndustryMedian}}</dd>{{end}}
+  <dt>matched</dt><dd>{{.CompanyName}} <span class="mono">[{{.PrimaryDomain}}]</span></dd>
+  {{if .Industry}}<dt>industry</dt><dd>{{.Industry}}</dd>{{end}}
+  {{- /* Surfaced so a wrong match is caught before it informs a decision. */ -}}
+  {{if .Alternatives}}
+  <dt>also matched</dt>
+  <dd class="hint">{{template "join" .Alternatives}} <em>(not used)</em></dd>
+  {{end}}
+</dl>
+{{- end}}
+
+{{define "nvd" -}}
+{{$r := .R}}
+<table>
+  <tr><th>CPE queried</th><th>CVEs</th><th>verification</th></tr>
+  {{range $r.Queries}}
+  <tr>
+    <td class="mono">{{.CPE}}</td>
+    <td class="num">{{.TotalResults}}</td>
+    <td>{{.Verification}}</td>
+  </tr>
+  {{- /* A CPE NVD has never heard of makes its zero meaningless, so say so rather than
+         letting it read as a clean result. */ -}}
+  {{if .KnownProducts}}
+  <tr><td colspan="3" class="hint">NVD lists these products for that vendor:
+    {{template "join" .KnownProducts}}</td></tr>
+  {{end}}
+  {{end}}
+</table>
+{{range $r.Unqueried}}<p class="hint">not queried (rate limit or deadline): <span class="mono">{{.}}</span></p>{{end}}
+{{- /* Counted over every CVE, never over the rows shown below. */ -}}
+<p class="counts">severity: critical={{$r.Severity.Critical}} high={{$r.Severity.High}}
+  medium={{$r.Severity.Medium}} low={{$r.Severity.Low}} unscored={{$r.Severity.Unscored}}</p>
+{{with capped $r.CVEs .Full}}
+<table>
+  <tr><th>CVE</th><th>score</th><th>published</th></tr>
+  {{range .Shown}}
+  <tr>
+    <td><a href="{{.URL}}" rel="noreferrer noopener" target="_blank">{{.ID}}</a></td>
+    <td class="num">
+      {{if .Severity}}{{printf "%.1f" .BaseScore}} {{.Severity}} (CVSS {{.CVSSVersion}}){{else}}unscored{{end}}
+      {{- /* A CNA's score is not NVD's own analysis; never let them look alike. */ -}}
+      {{if .ScoreSource}}{{if not (hasPrefix .ScoreSource "Primary")}}
+      <span class="hint">scored by {{.ScoreSource}}</span>{{end}}{{end}}
+    </td>
+    <td class="num">{{day .Published}}</td>
+  </tr>
+  {{end}}
+</table>
+{{if .Held}}<p class="hint">+{{.Held}} more not shown</p>{{end}}
+{{end}}
+{{- end}}
+
+{{- /* OSV keeps its own vocabulary — GitHub's MODERATE is never restated as NVD's MEDIUM —
+       and no numeric score is shown, because OSV supplies a vector rather than a score and
+       deriving the number would be recomputing a value instead of reporting one. */ -}}
+{{define "osv" -}}
+{{$r := .R}}
+<table>
+  <tr><th>package</th><th>advisories</th></tr>
+  {{range $r.Queries}}
+  <tr>
+    <td class="mono">{{.Package}}</td>
+    <td class="num">{{.TotalVulns}}{{if .Truncated}} <span class="hint">(truncated; OSV had more pages than were fetched)</span>{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+<p class="counts">severity: critical={{$r.Severity.Critical}} high={{$r.Severity.High}}
+  moderate={{$r.Severity.Moderate}} low={{$r.Severity.Low}} unrated={{$r.Severity.Unrated}}</p>
+{{with capped $r.Vulns .Full}}
+{{if .Shown}}
+<table>
+  <tr><th>advisory</th><th>severity</th><th>also known as</th></tr>
+  {{range .Shown}}
+  <tr>
+    <td><a href="{{.URL}}" rel="noreferrer noopener" target="_blank">{{.ID}}</a></td>
+    <td>{{if .Severity}}{{.Severity}}{{else}}unrated{{end}}</td>
+    <td class="mono">{{template "join" .CVEs}}</td>
+  </tr>
+  {{if .CVSSVector}}<tr><td colspan="3" class="hint mono">{{.CVSSType}}: {{.CVSSVector}}</td></tr>{{end}}
+  {{end}}
+</table>
+{{end}}
+{{if .Held}}<p class="hint">+{{.Held}} more not shown</p>{{end}}
+{{end}}
+{{- end}}
+
+{{- /* FedRAMP's own vocabulary throughout: "FedRAMP Certified" is not restated as
+       "authorized", and LI-SaaS is not folded into Low. */ -}}
+{{define "fedramp" -}}
+{{if .Offerings}}
+{{range .Offerings}}
+<div class="offering">
+  <div><b>{{.Offering}}</b> — {{.Status}}</div>
+  <div class="hint">
+    impact: {{.ImpactLevel}}{{if .AuthType}} · authorization: {{.AuthType}}{{end}}{{if .AuthCategory}} ({{.AuthCategory}}){{end}}
+  </div>
+  {{- /* Surfaced so a wrong company is caught before its authorization is credited to the
+         vendor actually being assessed. */ -}}
+  {{if .MatchedAlias}}<div class="hint">matched via alias: {{.MatchedAlias}} (listed as {{.Provider}})</div>{{end}}
+  <div><a href="{{.URL}}" rel="noreferrer noopener" target="_blank">{{.URL}}</a></div>
+</div>
+{{end}}
+{{else}}
+{{- /* Saying how many records were searched is what separates "not on the marketplace" from
+       "we could not read the marketplace". */ -}}
+<p>no listing for {{template "join" .Searched}}
+  <span class="hint">(searched {{.TotalRecords}} marketplace records)</span></p>
+{{end}}
+{{- end}}
+
+{{- /* Entries as filed. No severity, no framing, no narrative — the analyst reads the
+       notification and decides what it means (spec §2.7). */ -}}
+{{define "caag" -}}
+{{$r := .R}}
+{{if $r.Entries}}
+{{with capped $r.Entries .Full}}
+<table>
+  <tr><th>organization</th><th>breached</th><th>reported</th></tr>
+  {{range .Shown}}
+  <tr>
+    <td>
+      <a href="{{.ReportURL}}" rel="noreferrer noopener" target="_blank">{{.Organization}}</a>
+      {{- /* The filed name often differs from the vendor's; showing both lets an analyst
+             confirm the row belongs to the company under assessment. */ -}}
+      {{if not (eqFold .Organization .SearchedAs)}}<div class="hint">found by searching: {{.SearchedAs}}</div>{{end}}
+    </td>
+    <td class="num">{{if .BreachDates}}{{template "join" .BreachDates}}{{else}}n/a{{end}}</td>
+    <td class="num">{{.ReportedDate}}</td>
+  </tr>
+  {{end}}
+</table>
+{{if .Held}}<p class="hint">+{{.Held}} more not shown</p>{{end}}
+{{end}}
+{{else}}
+{{- /* The qualifier matters: this list covers California only, so an empty result is
+       "nothing reported in California", never "never breached". */ -}}
+<p>no California-reported breaches for {{template "join" $r.Searched}}</p>
+{{end}}
+{{- end}}
+
+{{define "manual" -}}
+{{- /* Analyst text, rendered exactly as recorded. .verbatim preserves the newlines without
+       template.HTML, which would switch off escaping on analyst-entered text. */ -}}
+<p class="verbatim">{{.Value}}</p>
+<p class="hint">recorded {{.RecordedAt.Format "2006-01-02"}} by an analyst —
+  <a href="{{.URL}}" rel="noreferrer noopener" target="_blank">{{.URL}}</a></p>
+{{- end}}
+
+{{- /* Every claim with the citation that supports it. Findings the parser dropped are printed
+       too: a silently missing answer is indistinguishable from a question nobody asked. */ -}}
+{{define "research" -}}
+<dl class="facts">
+  {{template "finding" dict "L" "supplier" "F" .SupplierDescription}}
+  {{template "finding" dict "L" "service" "F" .ServiceDescription}}
+  {{template "finding" dict "L" "deployment" "F" .ServiceImplementation}}
+  {{template "finding" dict "L" "supplier site" "F" .SupplierWebsite}}
+  {{template "finding" dict "L" "service site" "F" .ServiceWebsite}}
+  {{template "finding" dict "L" "security page" "F" .SecurityPage}}
+  {{template "finding" dict "L" "notifications" "F" .NotificationPage}}
+  {{range .Locations}}
+  {{template "finding" dict "L" .Kind "F" (finding (place .City .Country) .Citations)}}
+  {{end}}
+  {{- /* Outcome and resolution date are shown because they are the filter: they are how an
+         analyst confirms the entry is a concluded case rather than an allegation. */ -}}
+  {{range .CyberLawsuits}}
+  {{template "finding" dict "L" "lawsuit" "F" (finding (printf "%s — %s (%s)" .Value .Outcome .ResolutionDate) .Citations)}}
+  {{end}}
+  {{range .PastBreaches}}{{template "finding" dict "L" "breach" "F" .}}{{end}}
+  {{- /* Tri-state answers verbatim. "no_evidence_found" is not softened to "no": it is the
+         weaker claim on purpose. */ -}}
+  <dt>kaspersky</dt><dd class="mono">{{.UsedKaspersky}}</dd>
+  {{template "finding" dict "L" "" "F" .UsedKasperskyEvidence}}
+  <dt>moveit</dt><dd class="mono">{{.MOVEitImpacted}}</dd>
+  {{template "finding" dict "L" "" "F" .MOVEitEvidence}}
+  {{range .Dropped}}<dt class="dropped">dropped</dt><dd class="dropped">{{.}}</dd>{{end}}
+</dl>
+{{- end}}
+
+{{define "finding" -}}
+{{if .F.Value}}
+<dt>{{.L}}</dt>
+<dd>
+  <span class="verbatim">{{.F.Value}}</span>
+  {{template "cites" .F.Citations}}
+</dd>
+{{end}}
+{{- end}}

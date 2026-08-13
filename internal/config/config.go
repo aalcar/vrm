@@ -235,6 +235,18 @@ func (c *Config) EnabledSources() []string {
 	return out
 }
 
+// ManualNames returns the configured manual sources in config order.
+//
+// Order is config order rather than sorted: these are checklist categories, and the order an
+// analyst wrote them in is the order they expect to work through them.
+func (c *Config) ManualNames() []string {
+	names := make([]string, 0, len(c.ManualSources))
+	for _, m := range c.ManualSources {
+		names = append(names, m.Name)
+	}
+	return names
+}
+
 // TTL returns the cache lifetime for a source and whether one is configured. Manual
 // sources have no TTL by design (spec §7), so ok is false for them.
 func (c *Config) TTL(source string) (time.Duration, bool) {

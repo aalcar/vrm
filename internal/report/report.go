@@ -83,11 +83,11 @@ const (
 )
 
 // outcomeColor is the escape for each outcome. Absent means uncolored.
-var outcomeColor = map[outcome]string{
-	outcomeOK:         ansiGreen,
-	outcomeFailed:     ansiRed,
-	outcomeUnanswered: ansiYellow,
-	outcomeAwaiting:   ansiCyan,
+var outcomeColor = map[Outcome]string{
+	OutcomeOK:         ansiGreen,
+	OutcomeFailed:     ansiRed,
+	OutcomeUnanswered: ansiYellow,
+	OutcomeAwaiting:   ansiCyan,
 }
 
 // detailCap bounds how many rows of one list are printed.
@@ -112,17 +112,11 @@ func Render(w io.Writer, r Report) error {
 
 	p.entity(r)
 	p.config(r)
-
-	manual := make(map[string]bool, len(r.ManualSources))
-	for _, m := range r.ManualSources {
-		manual[m] = true
-	}
-
-	p.summary(r, manual)
+	p.summary(r.Summarize())
 
 	p.printf("\nsections\n")
-	for _, s := range r.Sections {
-		p.section(s, outcomeOf(s, manual))
+	for _, row := range r.Rows() {
+		p.section(row.Section, row.Outcome)
 	}
 
 	return p.err
@@ -138,31 +132,92 @@ func Render(w io.Writer, r Report) error {
 // The distinction is drawn here rather than by adding a fourth Status. A source does not know
 // whether it is manual — that is a config fact, held by the caller — and the orchestrator has
 // no reason to learn it. Nothing downstream of Status changes; only the label does.
-type outcome string
+//
+// Exported, along with Rows and Summarize, so the web templates label a section exactly as the
+// terminal does. Two renderers that each decide what a skip means would eventually disagree,
+// and an analyst comparing a browser tab against a terminal is the last person who should be
+// the one to discover it.
+type Outcome string
 
 const (
-	outcomeOK outcome = "ok"
-	// outcomeUnanswered is an automated source that produced nothing. Deliberately not
+	OutcomeOK Outcome = "ok"
+	// OutcomeUnanswered is an automated source that produced nothing. Deliberately not
 	// "not applicable" or "not queried": the skips behind it range from "this vendor
 	// publishes no packages" through "the API key is absent" to "BitSight has no company at
 	// that domain", and only the note can say which. The label claims no more than that the
 	// category has no answer.
-	outcomeUnanswered outcome = "unanswered"
-	outcomeAwaiting   outcome = "awaiting manual check"
-	outcomeFailed     outcome = "failed"
+	OutcomeUnanswered Outcome = "unanswered"
+	OutcomeAwaiting   Outcome = "awaiting manual check"
+	OutcomeFailed     Outcome = "failed"
 )
 
-func outcomeOf(s sources.Section, manual map[string]bool) outcome {
+// Slug is a CSS- and attribute-safe form of the outcome, for a renderer that styles by class
+// rather than by escape code.
+func (o Outcome) Slug() string {
+	if o == OutcomeAwaiting {
+		return "awaiting"
+	}
+	return string(o)
+}
+
+// Row is one section paired with the label it renders under.
+type Row struct {
+	Section sources.Section
+	Outcome Outcome
+}
+
+// Rows pairs every section with its outcome, in report order.
+func (r Report) Rows() []Row {
+	manual := make(map[string]bool, len(r.ManualSources))
+	for _, m := range r.ManualSources {
+		manual[m] = true
+	}
+	rows := make([]Row, 0, len(r.Sections))
+	for _, s := range r.Sections {
+		rows = append(rows, Row{Section: s, Outcome: outcomeOf(s, manual)})
+	}
+	return rows
+}
+
+// Summary is the at-a-glance state of an assessment: how many categories landed in each
+// outcome, and which sources those were.
+type Summary struct {
+	Total      int
+	OK         []string
+	Failed     []string
+	Unanswered []string
+	Awaiting   []string
+}
+
+// Summarize buckets the sections by outcome.
+func (r Report) Summarize() Summary {
+	s := Summary{Total: len(r.Sections)}
+	for _, row := range r.Rows() {
+		switch row.Outcome {
+		case OutcomeFailed:
+			s.Failed = append(s.Failed, row.Section.Source)
+		case OutcomeUnanswered:
+			s.Unanswered = append(s.Unanswered, row.Section.Source)
+		case OutcomeAwaiting:
+			s.Awaiting = append(s.Awaiting, row.Section.Source)
+		default:
+			s.OK = append(s.OK, row.Section.Source)
+		}
+	}
+	return s
+}
+
+func outcomeOf(s sources.Section, manual map[string]bool) Outcome {
 	switch s.Status {
 	case sources.StatusFailed:
-		return outcomeFailed
+		return OutcomeFailed
 	case sources.StatusSkipped:
 		if manual[s.Source] {
-			return outcomeAwaiting
+			return OutcomeAwaiting
 		}
-		return outcomeUnanswered
+		return OutcomeUnanswered
 	default:
-		return outcomeOK
+		return OutcomeOK
 	}
 }
 
@@ -173,31 +228,25 @@ func outcomeOf(s sources.Section, manual map[string]bool) outcome {
 // "answered" is listed by name, because a category that produced nothing is the one an analyst
 // is most likely to miss and the one that most changes what the report means. A bucket with
 // nothing in it prints no line: an assessment with no problems should look like one.
-func (p *printer) summary(r Report, manual map[string]bool) {
-	byOutcome := map[outcome][]string{}
-	for _, s := range r.Sections {
-		o := outcomeOf(s, manual)
-		byOutcome[o] = append(byOutcome[o], s.Source)
-	}
-
+func (p *printer) summary(s Summary) {
 	p.printf("\nsummary\n")
 	p.printf("  %d %s: %d answered, %d failed, %d unanswered, %d awaiting a manual check\n",
-		len(r.Sections), plural(len(r.Sections), "category", "categories"),
-		len(byOutcome[outcomeOK]), len(byOutcome[outcomeFailed]),
-		len(byOutcome[outcomeUnanswered]), len(byOutcome[outcomeAwaiting]))
+		s.Total, plural(s.Total, "category", "categories"),
+		len(s.OK), len(s.Failed), len(s.Unanswered), len(s.Awaiting))
 
 	for _, row := range []struct {
 		label   string
-		outcome outcome
+		outcome Outcome
+		names   []string
 	}{
-		{"failed", outcomeFailed},
-		{"unanswered", outcomeUnanswered},
-		{"awaiting", outcomeAwaiting},
+		{"failed", OutcomeFailed, s.Failed},
+		{"unanswered", OutcomeUnanswered, s.Unanswered},
+		{"awaiting", OutcomeAwaiting, s.Awaiting},
 	} {
-		if names := byOutcome[row.outcome]; len(names) > 0 {
+		if len(row.names) > 0 {
 			// Padded before painting: the escape is zero-width on screen but not to %-11s.
 			label := fmt.Sprintf("%-11s", row.label+":")
-			p.printf("  %s %s\n", p.paint(label, outcomeColor[row.outcome]), strings.Join(names, ", "))
+			p.printf("  %s %s\n", p.paint(label, outcomeColor[row.outcome]), strings.Join(row.names, ", "))
 		}
 	}
 }
@@ -307,7 +356,7 @@ func (p *printer) config(r Report) {
 	}
 }
 
-func (p *printer) section(s sources.Section, o outcome) {
+func (p *printer) section(s sources.Section, o Outcome) {
 	status := p.paint(string(o), outcomeColor[o])
 	if s.Cached {
 		// The marker only. Spec §11 makes fetched_at internal bookkeeping and says not to
@@ -581,6 +630,10 @@ func (p *printer) finding(label string, f sources.Finding) {
 		p.printf("      %s\n", c.URL)
 	}
 }
+
+// PackageNames renders the entity's packages as ecosystem:name, for a renderer that cannot
+// call a package-level function.
+func (r Report) PackageNames() []string { return packageNames(r.Entity.Packages) }
 
 // packageNames renders packages as ecosystem:name. The ecosystem is shown because the same
 // name means different software in different registries.
