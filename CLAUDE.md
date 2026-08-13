@@ -165,6 +165,18 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   makes them read every note to find the ones addressed to them. The distinction is drawn in
   the renderer from the configured manual-source list — never by adding a fourth `Status`, which
   a source has no way to set and the orchestrator has no reason to know.
+- **Color marks the tool's state, never the vendor's data.** Outcome labels and the `(cached)`
+  marker are colored; a CVE severity, a rating, and a FedRAMP status never are. Painting a
+  CRITICAL red is this tool making a severity claim in its own vocabulary on top of the one NVD
+  already made — the visual form of restating MODERATE as MEDIUM. Nothing is conveyed by color
+  alone, escapes are emitted only to a character device, and `NO_COLOR` disables them on
+  presence. Pad before painting: an escape is zero-width on screen and four bytes to `%-14s`.
+- **A 403 is not always a credential problem.** BitSight's company directory is global while
+  ratings are entitlement-scoped, so the search succeeds for every company and the rating call
+  answers 403 for the ones the subscription does not cover — with a key that worked a second
+  earlier. Telling an analyst to check `BITSIGHT_API_KEY` there sends them to rotate something
+  that is working. It stays `StatusFailed` rather than becoming a skip: the rating exists and
+  applies to this vendor, so it is "could not look", never "nothing to find".
 - **No editorializing.** Record values and citations. Severity judgments, timelines, and
   narrative are the analyst's job, not generated output.
 - **`html/template` only**, never `text/template`. Report data is externally sourced and

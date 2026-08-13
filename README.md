@@ -80,6 +80,11 @@ Long lists (CVEs, OSV advisories, breach filings) are capped at ten rows and say
 held back — `… +12 more (use --full)`. The severity counts above them are always over
 everything, never over the printed rows. `--full` prints the lot.
 
+Outcome labels are colored on a terminal and never when the output is redirected; `NO_COLOR`
+turns them off entirely. Only the tool's own state is colored — never vendor data, because
+painting a CRITICAL red would be `vrm` making a severity claim on top of the one NVD already
+made. Nothing is conveyed by color alone.
+
 Categories that are not automatable appear as sections telling you what to check and where.
 Record an answer and it renders verbatim from then on:
 

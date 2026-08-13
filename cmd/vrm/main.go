@@ -219,6 +219,7 @@ func runAssess(ctx context.Context, args []string) error {
 		NVDKeyPresent:    secrets.HasNVDKey(),
 		NoCache:          *noCache,
 		Full:             *full,
+		Color:            useColor(os.Stdout),
 	})
 }
 
@@ -475,6 +476,29 @@ func registerSources(
 		srcs = append(srcs, sources.NewManual(m.Name, m.Instruction, m.URL, st))
 	}
 	return srcs
+}
+
+// useColor reports whether to emit ANSI escapes.
+//
+// Two conditions, both required. NO_COLOR is honoured on presence rather than value, per the
+// convention at no-color.org — an analyst who has set it once should never have to set it
+// again per tool. And the escapes are only worth emitting to a character device: a report
+// redirected to a file or piped into a diff would otherwise carry sequences that show up as
+// noise in exactly the place someone is trying to read a difference.
+//
+// Detected from the file's mode rather than through golang.org/x/term, which would be a
+// dependency for one bit of information the standard library already has.
+func useColor(f *os.File) bool {
+	if _, set := os.LookupEnv("NO_COLOR"); set {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		// Unknowable, so assume not a terminal: a missing color is invisible, where an
+		// unwanted escape corrupts a file.
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 // warnCache reports cache trouble without failing anything.

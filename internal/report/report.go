@@ -56,6 +56,38 @@ type Report struct {
 	// can carry 120 CVEs, which buries the summary and the sections under it; the cap keeps
 	// the report readable, and this is how an analyst gets the rest.
 	Full bool
+
+	// Color emits ANSI escapes. The caller decides — the renderer has no business knowing
+	// whether its writer is a terminal, and a report piped to a file or a diff must never
+	// carry escapes. Off is always a correct answer; the report is designed to be legible
+	// without it, and nothing is encoded in color alone.
+	Color bool
+}
+
+// # What gets color, and what deliberately does not
+//
+// Only the tool's own state: a source's outcome, and the (cached) marker. Never the vendor
+// data. Painting a CRITICAL red would be this tool making a severity claim in its own
+// vocabulary on top of the one NVD already made — the visual equivalent of restating MODERATE
+// as MEDIUM, and the analyst's judgment to make rather than ours (spec §2.7).
+//
+// Every label is also complete text on its own. Color is emphasis on something already said,
+// never the only place something is said, so a plain-text report loses nothing.
+const (
+	ansiReset  = "\x1b[0m"
+	ansiGreen  = "\x1b[32m"
+	ansiRed    = "\x1b[31m"
+	ansiYellow = "\x1b[33m"
+	ansiCyan   = "\x1b[36m"
+	ansiDim    = "\x1b[2m"
+)
+
+// outcomeColor is the escape for each outcome. Absent means uncolored.
+var outcomeColor = map[outcome]string{
+	outcomeOK:         ansiGreen,
+	outcomeFailed:     ansiRed,
+	outcomeUnanswered: ansiYellow,
+	outcomeAwaiting:   ansiCyan,
 }
 
 // detailCap bounds how many rows of one list are printed.
@@ -71,7 +103,7 @@ const detailCap = 10
 // A write error is returned rather than ignored: a report truncated by a broken pipe is a
 // partial answer, and the caller decides what that is worth.
 func Render(w io.Writer, r Report) error {
-	p := &printer{w: w, full: r.Full}
+	p := &printer{w: w, full: r.Full, color: r.Color}
 
 	p.printf("query\n")
 	p.printf("  company:   %s\n", r.Query.Company)
@@ -163,7 +195,9 @@ func (p *printer) summary(r Report, manual map[string]bool) {
 		{"awaiting", outcomeAwaiting},
 	} {
 		if names := byOutcome[row.outcome]; len(names) > 0 {
-			p.printf("  %-11s %s\n", row.label+":", strings.Join(names, ", "))
+			// Padded before painting: the escape is zero-width on screen but not to %-11s.
+			label := fmt.Sprintf("%-11s", row.label+":")
+			p.printf("  %s %s\n", p.paint(label, outcomeColor[row.outcome]), strings.Join(names, ", "))
 		}
 	}
 }
@@ -172,9 +206,21 @@ func (p *printer) summary(r Report, manual map[string]bool) {
 // alternative is an error check after each of a hundred lines, which is where a missed one
 // hides.
 type printer struct {
-	w    io.Writer
-	full bool
-	err  error
+	w     io.Writer
+	full  bool
+	color bool
+	err   error
+}
+
+// paint wraps s in an escape, or returns it unchanged when color is off.
+//
+// It never pads: an escape is zero-width on screen but counts toward a %-14s width, so a
+// colored string put through a padded verb comes out misaligned. Callers pad first, then paint.
+func (p *printer) paint(s, code string) string {
+	if !p.color || code == "" {
+		return s
+	}
+	return code + s + ansiReset
 }
 
 func (p *printer) printf(format string, a ...any) {
@@ -262,11 +308,11 @@ func (p *printer) config(r Report) {
 }
 
 func (p *printer) section(s sources.Section, o outcome) {
-	status := string(o)
+	status := p.paint(string(o), outcomeColor[o])
 	if s.Cached {
 		// The marker only. Spec §11 makes fetched_at internal bookkeeping and says not to
 		// surface it as report content, so the age is not shown alongside it.
-		status += " (cached)"
+		status += p.paint(" (cached)", ansiDim)
 	}
 	p.printf("  %-14s %s\n", s.Source, status)
 

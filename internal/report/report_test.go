@@ -505,6 +505,81 @@ func TestAListAtTheCapIsNotAnnouncedAsTruncated(t *testing.T) {
 	}
 }
 
+// coloredReport has one section of each outcome, plus a cache marker.
+func coloredReport(color bool) Report {
+	r := baseReport()
+	r.Color = color
+	r.ManualSources = []string{"ssllabs"}
+	cached := sources.OK(sources.SourceCAAG, sources.CAAGResult{Searched: []string{"okta"}})
+	cached.Cached = true
+	r.Sections = []sources.Section{
+		cached,
+		sources.Failed(sources.SourceBitSight, errors.New("HTTP 403")),
+		sources.Skipped(sources.SourceOSV, "no packages"),
+		sources.Skipped("ssllabs", "no entry recorded"),
+	}
+	return r
+}
+
+// TestColorIsOffByDefault. Every other test in this file, and both golden files, depend on it:
+// a renderer that colored unasked would put escapes through a %-14s verb and misalign the
+// whole report the moment someone redirected it to a file.
+func TestColorIsOffByDefault(t *testing.T) {
+	if got := render(t, coloredReport(false)); strings.Contains(got, "\x1b[") {
+		t.Errorf("the renderer emitted an escape without being asked:\n%q", got)
+	}
+}
+
+// TestColorMarksOutcomesAndNothingElse pins the line this draws. Painting a CRITICAL red would
+// be this tool making a severity claim in its own vocabulary on top of NVD's — the visual
+// equivalent of restating MODERATE as MEDIUM.
+func TestColorMarksOutcomesAndNothingElse(t *testing.T) {
+	r := coloredReport(true)
+	r.Sections = append(r.Sections, sources.OK(sources.SourceNVD, sources.NVDResult{
+		Severity: sources.NVDSeverityCounts{Critical: 1},
+		CVEs: []sources.NVDVuln{{
+			ID: "CVE-2024-0001", Published: "2024-01-02T00:00:00.000",
+			BaseScore: 9.8, Severity: "CRITICAL", CVSSVersion: "3.1",
+			URL: "https://nvd.nist.gov/vuln/detail/CVE-2024-0001",
+		}},
+	}))
+
+	got := render(t, r)
+	for _, want := range []string{
+		ansiGreen + "ok" + ansiReset,
+		ansiRed + "failed" + ansiReset,
+		ansiYellow + "unanswered" + ansiReset,
+		ansiCyan + "awaiting manual check" + ansiReset,
+		ansiDim + " (cached)" + ansiReset,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%q", want, got)
+		}
+	}
+
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "CVE-2024-0001") && strings.Contains(line, "\x1b[") {
+			t.Errorf("vendor data was colored, which is a severity claim of our own: %q", line)
+		}
+	}
+}
+
+// TestColorDoesNotDisturbAlignment is the bug this is most likely to introduce. An escape is
+// zero-width on screen but four bytes to %-11s, so painting before padding silently shortens
+// every colored label and ragged-edges the summary.
+func TestColorDoesNotDisturbAlignment(t *testing.T) {
+	strip := func(s string) string {
+		for _, code := range []string{ansiReset, ansiGreen, ansiRed, ansiYellow, ansiCyan, ansiDim} {
+			s = strings.ReplaceAll(s, code, "")
+		}
+		return s
+	}
+	if got, want := strip(render(t, coloredReport(true))), render(t, coloredReport(false)); got != want {
+		t.Errorf("stripping the escapes did not reproduce the uncolored report\n got: %q\nwant: %q",
+			got, want)
+	}
+}
+
 // TestOverridesAndCacheMarkersAreVisible. An override changes what was queried and a cache hit
 // means nothing was queried at all; both are facts about the run that an analyst reading the
 // numbers has to be able to see.
