@@ -339,6 +339,61 @@ func TestFetchSkips(t *testing.T) {
 	})
 }
 
+// TestAForbiddenRatingBlamesTheSubscriptionRatherThanTheKey.
+//
+// BitSight's company directory is global but ratings are entitlement-scoped, so the search
+// succeeds for every company and the rating call answers 403 for the ones the subscription
+// does not cover — with the same key that fetched a different company's rating a moment
+// earlier. The handler below reproduces exactly that split, and the body is the real one
+// (testdata/bitsight_forbidden.json, captured from api.bitsighttech.com for auth0.com).
+//
+// Calling that a credential problem sends an analyst to rotate a key that is working. The
+// message has to name the company instead, because a domain search returns as many as sixteen
+// matches and only one of them was refused.
+func TestAForbiddenRatingBlamesTheSubscriptionRatherThanTheKey(t *testing.T) {
+	b := newTestBitSight(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/companies/search") {
+			w.Write(fixture(t, "bitsight_search.json"))
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		w.Write(fixture(t, "bitsight_forbidden.json"))
+	}, "a-perfectly-good-key")
+
+	sec, err := b.Fetch(context.Background(), Query{}, ResolvedEntity{Domains: []string{"example.com"}})
+	if err == nil {
+		t.Fatal("Fetch returned no error for a refused rating")
+	}
+	// A failure, not a skip: the rating exists and applies to this vendor, and we were not
+	// allowed to read it. That is "could not look", which must never render as "nothing found".
+	if sec.Status != StatusFailed {
+		t.Errorf("Status = %q, want failed", sec.Status)
+	}
+	if strings.Contains(sec.Err, "rejected the credentials") {
+		t.Errorf("a 403 was reported as a credential failure: %q", sec.Err)
+	}
+	for _, want := range []string{"subscription", "Example Corp", "example.com"} {
+		if !strings.Contains(sec.Err, want) {
+			t.Errorf("Err = %q, want it to mention %q", sec.Err, want)
+		}
+	}
+}
+
+// TestAForbiddenSearchIsStillReportedAgainstTheSearch keeps the two calls distinguishable. If
+// the directory itself ever became entitlement-scoped, the message must not claim a company
+// was refused when no company had been chosen yet.
+func TestAForbiddenSearchIsStillReportedAgainstTheSearch(t *testing.T) {
+	b := newTestBitSight(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write(fixture(t, "bitsight_forbidden.json"))
+	}, "k")
+
+	sec, _ := b.Fetch(context.Background(), Query{}, ResolvedEntity{Domains: []string{"example.com"}})
+	if !strings.Contains(sec.Err, "company search") {
+		t.Errorf("Err = %q, want it to name the search rather than a company", sec.Err)
+	}
+}
+
 // Acceptance criterion 2: an API error surfaces as StatusFailed without crashing.
 func TestFetchHTTPErrorsBecomeFailed(t *testing.T) {
 	tests := []struct {
@@ -346,7 +401,8 @@ func TestFetchHTTPErrorsBecomeFailed(t *testing.T) {
 		wantErr string
 	}{
 		{http.StatusUnauthorized, "credentials"},
-		{http.StatusForbidden, "credentials"},
+		// 403 is deliberately not "credentials" — see the entitlement test below.
+		{http.StatusForbidden, "subscription"},
 		{http.StatusNotFound, "404"},
 		{http.StatusTooManyRequests, "rate limit"},
 		{http.StatusInternalServerError, "500"},

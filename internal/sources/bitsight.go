@@ -112,7 +112,7 @@ func (b *BitSight) Fetch(ctx context.Context, q Query, ent ResolvedEntity) (Sect
 	}
 
 	company, alternatives := selectCompany(companies, domain)
-	rating, err := b.fetchRating(ctx, company.GUID)
+	rating, err := b.fetchRating(ctx, company)
 	if err != nil {
 		return Failed(b.Name(), err), err
 	}
@@ -130,11 +130,14 @@ func (b *BitSight) Fetch(ctx context.Context, q Query, ent ResolvedEntity) (Sect
 }
 
 // searchByDomain calls GET /ratings/v1/companies/search?domain=<domain>.
+//
+// The company directory is global: this returns matches whether or not the subscription
+// covers them. Entitlement is enforced one call later, on the rating itself.
 func (b *BitSight) searchByDomain(ctx context.Context, domain string) ([]bitsightCompany, error) {
 	u := fmt.Sprintf("%s/ratings/v1/companies/search?domain=%s",
 		b.baseURL, url.QueryEscape(domain))
 
-	body, err := b.get(ctx, u)
+	body, err := b.get(ctx, u, fmt.Sprintf("the company search for %q", domain))
 	if err != nil {
 		return nil, err
 	}
@@ -146,23 +149,27 @@ func (b *BitSight) searchByDomain(ctx context.Context, domain string) ([]bitsigh
 }
 
 // fetchRating calls GET /ratings/v1/companies/{guid}.
-func (b *BitSight) fetchRating(ctx context.Context, guid string) (BitSightRating, error) {
-	u := fmt.Sprintf("%s/ratings/v1/companies/%s", b.baseURL, url.PathEscape(guid))
+//
+// It takes the whole company rather than just the GUID so a 403 can name who was refused. A
+// bare GUID in that message would leave an analyst unable to tell which of a search's sixteen
+// matches the subscription is missing.
+func (b *BitSight) fetchRating(ctx context.Context, company bitsightCompany) (BitSightRating, error) {
+	u := fmt.Sprintf("%s/ratings/v1/companies/%s", b.baseURL, url.PathEscape(company.GUID))
 
-	body, err := b.get(ctx, u)
+	body, err := b.get(ctx, u, fmt.Sprintf("the rating for %s [%s]", company.Name, company.PrimaryDomain))
 	if err != nil {
 		return BitSightRating{}, err
 	}
 	rating, err := parseRatingDetail(body)
 	if err != nil {
-		return BitSightRating{}, fmt.Errorf("rating for company %s: %w", guid, err)
+		return BitSightRating{}, fmt.Errorf("rating for company %s: %w", company.GUID, err)
 	}
 	return rating, nil
 }
 
 // get performs an authenticated GET and returns the body, mapping transport and HTTP
 // status problems to errors that never contain the API key.
-func (b *BitSight) get(ctx context.Context, rawURL string) ([]byte, error) {
+func (b *BitSight) get(ctx context.Context, rawURL, what string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -193,7 +200,7 @@ func (b *BitSight) get(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, statusError(resp.StatusCode)
+		return nil, statusError(resp.StatusCode, what)
 	}
 	return body, nil
 }
@@ -203,17 +210,31 @@ func (b *BitSight) get(ctx context.Context, rawURL string) ([]byte, error) {
 // The response body is deliberately not included: it is attacker- and vendor-controlled
 // text that gets rendered into a report, and on an auth failure some APIs echo back the
 // credential that was rejected.
-func statusError(code int) error {
+// what describes the request in the analyst's terms, e.g. `the rating for Auth0, Inc.
+// [auth0.com]`. It is built from values we sent, never from the response.
+func statusError(code int, what string) error {
 	switch code {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusUnauthorized:
 		return fmt.Errorf(
-			"BitSight rejected the credentials (HTTP %d); check %s", code, EnvBitsightKeyName)
+			"BitSight rejected the credentials (HTTP 401); check %s", EnvBitsightKeyName)
+	case http.StatusForbidden:
+		// Not a credential problem, and saying so cost an hour of looking at the wrong thing.
+		// BitSight's company directory is global but ratings are entitlement-scoped: the
+		// search finds every company, and asking for one the subscription does not cover
+		// answers 403 {"message": "You cannot view this company"} — with the same valid key
+		// that fetched a different company's rating a second earlier. Reported as a failure
+		// rather than a skip because the rating exists and applies to this vendor; we are
+		// simply not allowed to read it, which is "could not look", never "nothing to find".
+		return fmt.Errorf(
+			"BitSight refused %s (HTTP 403): the key is valid — it is this subscription that "+
+				"does not cover that company, so there is nothing to fix in %s",
+			what, EnvBitsightKeyName)
 	case http.StatusNotFound:
-		return fmt.Errorf("BitSight returned HTTP 404; the company or endpoint was not found")
+		return fmt.Errorf("BitSight returned HTTP 404 for %s; the company or endpoint was not found", what)
 	case http.StatusTooManyRequests:
 		return errors.New("BitSight rate limit exceeded (HTTP 429); retry later")
 	default:
-		return fmt.Errorf("BitSight returned HTTP %d", code)
+		return fmt.Errorf("BitSight returned HTTP %d for %s", code, what)
 	}
 }
 
