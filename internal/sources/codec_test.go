@@ -177,12 +177,12 @@ func populatedSections() map[string]Section {
 func TestSectionRoundTripPreservesTheConcreteType(t *testing.T) {
 	for source, want := range populatedSections() {
 		t.Run(source, func(t *testing.T) {
-			raw, err := EncodeSection(want)
+			raw, err := EncodeSection(want, "fingerprint")
 			if err != nil {
 				t.Fatalf("EncodeSection: %v", err)
 			}
 
-			got, err := DecodeSection(source, raw)
+			got, _, err := DecodeSection(source, raw)
 			if err != nil {
 				t.Fatalf("DecodeSection: %v", err)
 			}
@@ -215,6 +215,112 @@ func TestEveryAutomatedSourceIsCacheable(t *testing.T) {
 	}
 }
 
+// fingerprintEntity is a resolved entity with something in every field a source reads.
+func fingerprintEntity() ResolvedEntity {
+	return ResolvedEntity{
+		CanonicalName: "Okta, Inc.",
+		Domains:       []string{"okta.com"},
+		CPEs:          []string{"cpe:2.3:a:okta:verify:*:*:*:*:*:*:*:*"},
+		Packages:      []Package{{Ecosystem: "npm", Name: "@okta/okta-auth-js"}},
+		Aliases:       []string{"Auth0"},
+	}
+}
+
+// TestEverySourceFingerprintsSomething catches a source registered with a fingerprint that
+// ignores the entity — a constant. That fails open: every row hits regardless of what the
+// section was computed from, which is exactly the bug the fingerprint exists to prevent, and
+// nothing else would notice.
+func TestEverySourceFingerprintsSomething(t *testing.T) {
+	q := Query{Company: "Okta", Service: "SSO"}
+	for _, source := range CacheableSources() {
+		t.Run(source, func(t *testing.T) {
+			full := SectionInputs(source, q, fingerprintEntity())
+			empty := SectionInputs(source, q, ResolvedEntity{})
+			if full == "" {
+				t.Fatal("a registered source fingerprinted as the empty string")
+			}
+			if full == empty {
+				t.Error("the fingerprint is the same for a fully resolved entity and an empty " +
+					"one, so it reads none of the identifiers this source consumes")
+			}
+		})
+	}
+}
+
+// TestFingerprintsAreScopedToTheSourceThatReadsThem keeps one source's cache from being
+// invalidated by a field it never looks at. A resolution that gains a package would otherwise
+// throw away FedRAMP's 168h row and re-fetch 4.7 MB for nothing.
+func TestFingerprintsAreScopedToTheSourceThatReadsThem(t *testing.T) {
+	q := Query{Company: "Okta", Service: "SSO"}
+	base := fingerprintEntity()
+
+	changed := base
+	changed.CPEs = []string{"cpe:2.3:a:okta:access_gateway:*:*:*:*:*:*:*:*"}
+
+	if SectionInputs(SourceNVD, q, base) == SectionInputs(SourceNVD, q, changed) {
+		t.Error("nvd's fingerprint did not move when the CPEs did")
+	}
+	for _, source := range []string{SourceBitSight, SourceOSV, SourceFedRAMP, SourceCAAG, SourceResearch} {
+		if SectionInputs(source, q, base) != SectionInputs(source, q, changed) {
+			t.Errorf("%s's fingerprint moved when only the CPEs changed", source)
+		}
+	}
+}
+
+// TestFingerprintsAreOrderSensitive. FedRAMP and CA AG cap how many names they look up, so a
+// reordered alias list is a genuine change in what gets queried, not a cosmetic one.
+func TestFingerprintsAreOrderSensitive(t *testing.T) {
+	q := Query{Company: "Okta", Service: "SSO"}
+	forward := ResolvedEntity{CPEs: []string{"cpe:a", "cpe:b"}}
+	reversed := ResolvedEntity{CPEs: []string{"cpe:b", "cpe:a"}}
+
+	if SectionInputs(SourceNVD, q, forward) == SectionInputs(SourceNVD, q, reversed) {
+		t.Error("two different orderings fingerprinted the same")
+	}
+}
+
+// TestFingerprintsDoNotCollideAcrossABoundary. Concatenating identifiers without a length
+// would make ["ab","c"] and ["a","bc"] the same fingerprint, and a two-CPE list would silently
+// hit a row computed from a different two-CPE list.
+func TestFingerprintsDoNotCollideAcrossABoundary(t *testing.T) {
+	q := Query{Company: "Okta", Service: "SSO"}
+	left := ResolvedEntity{CPEs: []string{"ab", "c"}}
+	right := ResolvedEntity{CPEs: []string{"a", "bc"}}
+
+	if SectionInputs(SourceNVD, q, left) == SectionInputs(SourceNVD, q, right) {
+		t.Error(`["ab","c"] and ["a","bc"] fingerprinted the same`)
+	}
+}
+
+// TestEncodeRejectsAnUnfingerprintedSection. Absent inputs is how a row written before this
+// rule is recognized, so writing one deliberately would burn a write and cache nothing.
+func TestEncodeRejectsAnUnfingerprintedSection(t *testing.T) {
+	_, err := EncodeSection(bitsightSection(), "")
+	if err == nil {
+		t.Fatal("encoded a section with no input fingerprint; the row could never be read back")
+	}
+	if !strings.Contains(err.Error(), "fingerprint") {
+		t.Errorf("error does not say why: %v", err)
+	}
+}
+
+// TestDecodeReportsAnAbsentFingerprint pins the upgrade path. A row written before
+// fingerprinting decodes fine — it is well-formed — and reports "", which matches no live
+// fingerprint, so it expires on its first read instead of erroring.
+func TestDecodeReportsAnAbsentFingerprint(t *testing.T) {
+	raw := `{"source":"bitsight","status":"ok"}`
+	section, inputs, err := DecodeSection(SourceBitSight, []byte(raw))
+	if err != nil {
+		t.Fatalf("a row predating the fingerprint should still decode: %v", err)
+	}
+	if inputs != "" {
+		t.Errorf("inputs = %q, want the empty string", inputs)
+	}
+	if section.Status != StatusOK {
+		t.Errorf("Status = %q", section.Status)
+	}
+}
+
 // TestManualSourcesAreNotCacheable pins the exemption. Manual entries are analyst data: they
 // are read from their own row every run and never expire (spec §7).
 func TestManualSourcesAreNotCacheable(t *testing.T) {
@@ -226,7 +332,7 @@ func TestManualSourcesAreNotCacheable(t *testing.T) {
 }
 
 func TestEncodeRejectsAnUnregisteredSource(t *testing.T) {
-	_, err := EncodeSection(OK("ssllabs", ManualResult{Value: "A+"}))
+	_, err := EncodeSection(OK("ssllabs", ManualResult{Value: "A+"}), "fingerprint")
 	if err == nil {
 		t.Fatal("encoded a section for a source with no codec; the row would be unreadable")
 	}
@@ -240,7 +346,7 @@ func TestEncodeRejectsAnUnregisteredSource(t *testing.T) {
 // Encoding it would succeed and the row would decode into a zero NVDResult — a section
 // reporting ok with every count at zero, which reads exactly like a clean vendor.
 func TestEncodeRejectsDataOfTheWrongType(t *testing.T) {
-	_, err := EncodeSection(OK(SourceNVD, BitSightRating{Rating: 780}))
+	_, err := EncodeSection(OK(SourceNVD, BitSightRating{Rating: 780}), "fingerprint")
 	if err == nil {
 		t.Fatal("encoded BitSight data under the nvd source; it would decode as a zero NVDResult")
 	}
@@ -252,12 +358,12 @@ func TestEncodeRejectsDataOfTheWrongType(t *testing.T) {
 // TestDecodeRejectsARowKeyedUnderAnotherSource guards against attributing one source's data
 // to another, which is the same class of error as a wrong CPE: plausible, sourced, and wrong.
 func TestDecodeRejectsARowKeyedUnderAnotherSource(t *testing.T) {
-	raw, err := EncodeSection(populatedSections()[SourceCAAG])
+	raw, err := EncodeSection(populatedSections()[SourceCAAG], "fingerprint")
 	if err != nil {
 		t.Fatalf("EncodeSection: %v", err)
 	}
 
-	if _, err := DecodeSection(SourceFedRAMP, raw); err == nil {
+	if _, _, err := DecodeSection(SourceFedRAMP, raw); err == nil {
 		t.Fatal("decoded a caag row as a fedramp section")
 	}
 }
@@ -275,7 +381,7 @@ func TestDecodeRejectsMalformedPayloads(t *testing.T) {
 			if name == "unknown source" {
 				source = "ssllabs"
 			}
-			if _, err := DecodeSection(source, []byte(raw)); err == nil {
+			if _, _, err := DecodeSection(source, []byte(raw)); err == nil {
 				t.Fatal("decoded a malformed payload without error")
 			}
 		})
@@ -293,11 +399,11 @@ func TestRoundTripOfAParsedResearchReply(t *testing.T) {
 		t.Fatalf("parseResearch: %v", err)
 	}
 
-	raw, err := EncodeSection(OK(SourceResearch, want))
+	raw, err := EncodeSection(OK(SourceResearch, want), "fingerprint")
 	if err != nil {
 		t.Fatalf("EncodeSection: %v", err)
 	}
-	section, err := DecodeSection(SourceResearch, raw)
+	section, _, err := DecodeSection(SourceResearch, raw)
 	if err != nil {
 		t.Fatalf("DecodeSection: %v", err)
 	}
@@ -326,11 +432,11 @@ func TestNonOKSectionsSurviveTheCodec(t *testing.T) {
 		Failed(SourceFedRAMP, errFedRAMPExample),
 	} {
 		t.Run(string(want.Status), func(t *testing.T) {
-			raw, err := EncodeSection(want)
+			raw, err := EncodeSection(want, "fingerprint")
 			if err != nil {
 				t.Fatalf("EncodeSection: %v", err)
 			}
-			got, err := DecodeSection(want.Source, raw)
+			got, _, err := DecodeSection(want.Source, raw)
 			if err != nil {
 				t.Fatalf("DecodeSection: %v", err)
 			}

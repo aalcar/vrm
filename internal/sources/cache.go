@@ -14,9 +14,12 @@ const cacheWriteTimeout = 5 * time.Second
 //
 // An interface rather than *store.Store so this package keeps depending on nothing, and so
 // the caching behaviour can be tested without Postgres. The store's real methods satisfy it.
+// inputs, on both methods, is the SectionInputs fingerprint of the identifiers the section was
+// computed from. It is opaque to the cache: store it, and treat a row whose stored value
+// differs as a miss.
 type SectionCache interface {
-	CachedSection(ctx context.Context, company, service, source string, ttl time.Duration) (Section, bool, error)
-	PutSection(ctx context.Context, company, service, source string, section Section) error
+	CachedSection(ctx context.Context, company, service, source string, ttl time.Duration, inputs string) (Section, bool, error)
+	PutSection(ctx context.Context, company, service, source string, section Section, inputs string) error
 }
 
 // cachedSource wraps a Source with a read-through, write-through cache (spec §11).
@@ -74,9 +77,18 @@ func (c *cachedSource) Name() string { return c.inner.Name() }
 // blip for the source's whole TTL — 168h for FedRAMP — and there is no way for an analyst to
 // tell a cached failure from a live one. A skip is worse: it is computed from the resolved
 // entity, so caching it would outlive the resolution fix that was supposed to clear it.
+//
+// # Only sections computed from this run's identifiers are served
+//
+// The row is keyed on the vendor but the answer is about the identifiers resolution supplied,
+// and those move — an analyst passes --cpe, or the mapping itself changes. Both sides of the
+// cache carry a fingerprint of them so that a row computed from other identifiers reads as a
+// miss. See the note in codec.go for why this is not a column.
 func (c *cachedSource) Fetch(ctx context.Context, q Query, ent ResolvedEntity) (Section, error) {
+	inputs := SectionInputs(c.Name(), q, ent)
+
 	if !c.bypass {
-		if section, ok := c.lookup(ctx, q); ok {
+		if section, ok := c.lookup(ctx, q, inputs); ok {
 			section.Cached = true
 			return section, nil
 		}
@@ -84,7 +96,7 @@ func (c *cachedSource) Fetch(ctx context.Context, q Query, ent ResolvedEntity) (
 
 	section, err := c.inner.Fetch(ctx, q, ent)
 	if section.Status == StatusOK {
-		c.record(ctx, q, section)
+		c.record(ctx, q, section, inputs)
 	}
 	return section, err
 }
@@ -93,8 +105,8 @@ func (c *cachedSource) Fetch(ctx context.Context, q Query, ent ResolvedEntity) (
 //
 // A read error is a miss with a warning, not a failure. The cache is an accelerator; refusing
 // to assess a vendor because the accelerator is sick would trade a slow answer for none.
-func (c *cachedSource) lookup(ctx context.Context, q Query) (Section, bool) {
-	section, hit, err := c.cache.CachedSection(ctx, q.Company, q.Service, c.Name(), c.ttl)
+func (c *cachedSource) lookup(ctx context.Context, q Query, inputs string) (Section, bool) {
+	section, hit, err := c.cache.CachedSection(ctx, q.Company, q.Service, c.Name(), c.ttl, inputs)
 	if err != nil {
 		c.warnf("%s: could not read the cache, fetching fresh: %w", c.Name(), err)
 		return Section{}, false
@@ -117,11 +129,11 @@ func (c *cachedSource) lookup(ctx context.Context, q Query) (Section, bool) {
 // and a result already in hand must not be discarded because the clock that bounded obtaining
 // it also bounds recording it. Cancellation is dropped and values are kept — the write is no
 // longer part of the work the caller is waiting on.
-func (c *cachedSource) record(ctx context.Context, q Query, section Section) {
+func (c *cachedSource) record(ctx context.Context, q Query, section Section, inputs string) {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cacheWriteTimeout)
 	defer cancel()
 
-	if err := c.cache.PutSection(writeCtx, q.Company, q.Service, c.Name(), section); err != nil {
+	if err := c.cache.PutSection(writeCtx, q.Company, q.Service, c.Name(), section, inputs); err != nil {
 		c.warnf("%s: fetched successfully but could not be cached: %w", c.Name(), err)
 	}
 }

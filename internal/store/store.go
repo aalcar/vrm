@@ -221,10 +221,16 @@ func (s *Store) SetManual(ctx context.Context, company, service, source, value s
 // The TTL comparison happens in Postgres rather than in Go. fetched_at is written by the
 // database's clock, so comparing it against the application's would make freshness depend on
 // how closely two machines agree.
+//
+// inputs is this run's fingerprint of the identifiers the source will read (sources.SectionInputs).
+// A row computed from different identifiers is a miss, not a hit: it is a real answer to a
+// question nobody is asking on this run. That is what makes --cpe and --domain work — an
+// override that read yesterday's row back would silently do nothing.
 func (s *Store) CachedSection(
 	ctx context.Context,
 	company, service, source string,
 	ttl time.Duration,
+	inputs string,
 ) (sources.Section, bool, error) {
 	// A source with no configured TTL is not cached at all. Treating a non-positive TTL as
 	// "always fresh" would turn a missing config line into a permanent cache.
@@ -247,12 +253,19 @@ func (s *Store) CachedSection(
 		return sources.Section{}, false, fmt.Errorf("read cached section for %s: %w", source, err)
 	}
 
-	section, err := sources.DecodeSection(source, raw)
+	section, storedInputs, err := sources.DecodeSection(source, raw)
 	if err != nil {
 		// A row that cannot be decoded is reported rather than swallowed. Silently treating
 		// it as a miss would hide a schema change behind nothing worse than a slow run, and
 		// the next write overwrites it anyway.
 		return sources.Section{}, false, fmt.Errorf("cached section for %s is unreadable: %w", source, err)
+	}
+	// Compared here rather than in the WHERE clause on purpose: a row filtered out in SQL is
+	// indistinguishable from no row, and the unreadable-row error above would stop firing for
+	// exactly the malformed payloads it exists to catch. A row written before fingerprinting
+	// has no stored value and so expires on its first read.
+	if storedInputs != inputs {
+		return sources.Section{}, false, nil
 	}
 	return section, true, nil
 }
@@ -270,8 +283,9 @@ func (s *Store) PutSection(
 	ctx context.Context,
 	company, service, source string,
 	section sources.Section,
+	inputs string,
 ) error {
-	payload, err := sources.EncodeSection(section)
+	payload, err := sources.EncodeSection(section, inputs)
 	if err != nil {
 		return fmt.Errorf("encode section for %s: %w", source, err)
 	}

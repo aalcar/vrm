@@ -16,8 +16,7 @@ anything. [`CLAUDE.md`](CLAUDE.md) covers invariants and workflow.
 
 ## Status
 
-**Phases 0–9 complete**; Phase 10 (CLI rendering) is next. See spec §13 for the full
-phased plan.
+**Phases 0–10 complete**; Phase 11 (web UI) is next. See spec §13 for the full phased plan.
 
 `vrm assess` today resolves a company + service to machine identifiers via the Anthropic
 API, queries every source below concurrently, and prints a sourced report. Successful
@@ -25,7 +24,7 @@ sections and the entity resolution are cached in Postgres under per-source TTLs,
 assessment inside the TTL takes 0.05s against roughly 30s for a fresh one. `--no-cache`
 forces fresh calls; analyst-recorded manual entries never expire and are never cleared by it.
 
-The renderer is still deliberately plain (Phase 10) and there is no web UI yet (Phase 11).
+There is no web UI yet (Phase 11).
 
 | Source | Keyed on | State |
 |---|---|---|
@@ -61,6 +60,26 @@ Non-secret settings — model, source toggles, cache TTLs, timeouts — live in 
 go run ./cmd/vrm assess "Okta" --service "SSO"
 ```
 
+The report opens with the resolved identifiers, then a summary, then one section per
+category:
+
+```
+summary
+  9 categories: 6 answered, 1 failed, 1 unanswered, 1 awaiting a manual check
+  failed:     bitsight
+  unanswered: osv
+  awaiting:   ssllabs
+```
+
+Those last two are both `StatusSkipped` underneath and they mean different things.
+`unanswered` is a gap in the data — nothing to query, or a credential absent — and
+`awaiting manual check` is a task assigned to you. Every section says which it is on its own
+line, so no category ever drops off silently.
+
+Long lists (CVEs, OSV advisories, breach filings) are capped at ten rows and say what they
+held back — `… +12 more (use --full)`. The severity counts above them are always over
+everything, never over the printed rows. `--full` prints the lot.
+
 Categories that are not automatable appear as sections telling you what to check and where.
 Record an answer and it renders verbatim from then on:
 
@@ -77,16 +96,26 @@ you correct a bad mapping without editing code:
 --cpe cpe:2.3:a:okta:access_gateway      # override the resolved CPEs (NVD), comma-separated
 ```
 
-`--cpe` accepts the short `cpe:2.3:<part>:<vendor>:<product>` form, which is exactly what the
-tool prints when it reports that a resolved CPE isn't in NVD's dictionary:
+`--cpe` accepts the short `cpe:2.3:<part>:<vendor>:<product>` form. Both overrides re-query
+the sources that read them: a cached section records which identifiers produced it, so an
+override never reads back the answer it was meant to correct.
 
-```
-nvd  failed
-  error: none of the resolved CPEs exist in NVD's CPE dictionary, so a zero CVE count
-  would be meaningless; entity resolution likely invented them
-    cpe:2.3:a:okta:single_sign-on is unknown to NVD; NVD lists these products for that
-    vendor: access_gateway, active_directory_agent, advanced_server_access, ...
-```
+### The model does not write CPEs
+
+Asking a model to compose a CPE product token asks it to recall a string, and it invents one
+when it can't. Across six consecutive Okta runs the same prompt returned no CPE four times
+and a fabricated one twice — and a wrong CPE returns another vendor's CVEs while nothing
+fails.
+
+So resolution is inverted. The model proposes a **vendor** token; NVD's CPE dictionary is
+asked which products it actually registers under that vendor; the model **chooses from that
+list**; and every choice is checked for membership before it can reach the entity. A token
+that isn't in the catalogue is dropped as invented and named in the report. The catalogue is
+a hard ceiling on what can be queried, and a truncated one says so — "nothing matched" is a
+weaker claim when only the first page was read.
+
+Okta/SSO went from an invented CPE to six real ones, identical across three runs. The escape
+hatch is still `--cpe`, for the cases the dictionary cannot settle.
 
 ## Development
 
@@ -112,7 +141,7 @@ The core is a library; the interfaces are thin front-ends over it.
 - `internal/assess` — orchestrator: resolve → fan-out → aggregate
 - `internal/sources` — one file per source, all behind a common `Source` interface
 - `internal/store` — Postgres cache and analyst-supplied manual entries
-- `internal/report` — normalized `Report` type and CLI renderer
+- `internal/report` — the renderer, pinned by golden files in `internal/report/testdata`
 
 Data sources are a **fixed** set (spec §6 and §7). Every automated source is a passive
 lookup against an existing database — `vrm` never scans or probes vendor infrastructure.

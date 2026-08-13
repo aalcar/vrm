@@ -1,0 +1,95 @@
+query
+  company:   Okta
+  service:   SSO
+  cache key: okta / sso
+
+resolved entity
+  canonical: Okta, Inc.
+  domains:   okta.com
+  cpes:      cpe:2.3:a:okta:verify:*:*:*:*:*:*:*:*, cpe:2.3:a:okta:access_gateway:*:*:*:*:*:*:*:*
+             chosen from the 9 products NVD registers under cpe:2.3:a:okta
+  packages:  npm:@okta/okta-auth-js
+  aliases:   Auth0
+  dropped:   product "okta" (not registered under cpe:2.3:a:okta)
+
+config config.yaml
+  models:    resolution=claude-sonnet-5 research=claude-sonnet-5
+  automated: bitsight, nvd, osv, fedramp, caag, llm_research
+  manual:    cvedetails, ssllabs, openbugbounty
+  optional credentials: NVD=set
+
+summary
+  9 categories: 7 answered, 0 failed, 0 unanswered, 2 awaiting a manual check
+  awaiting:   cvedetails, openbugbounty
+
+sections
+  bitsight       ok
+    rating:   780 (Advanced) as of 2026-08-01
+    vs industry median: above
+    matched:  Okta, Inc. [okta.com]
+    industry: Technology
+    also matched (not used): Okta Government Solutions
+    also matched (not used): Auth0
+    source:   https://service.bitsighttech.com/
+  nvd            ok
+    cpe:2.3:a:okta:verify — 2 CVEs (has CVEs)
+    cpe:2.3:a:okta:okta — 0 CVEs (not in NVD's CPE dictionary)
+      NVD lists these products for that vendor: access_gateway, verify
+    not queried (rate limit or deadline): cpe:2.3:a:okta:mobile:*:*:*:*:*:*:*:*
+    severity: critical=1 high=0 medium=0 low=0 unscored=1
+    CVE-2024-0001    9.8 CRITICAL (CVSS 3.1)    2024-01-02  https://nvd.nist.gov/vuln/detail/CVE-2024-0001
+    CVE-2024-0002    unscored                   2024-05-06  https://nvd.nist.gov/vuln/detail/CVE-2024-0002
+      scored by: GitHub, Inc.
+  osv            ok
+    npm:@okta/okta-auth-js — 2 advisories
+      (truncated; OSV had more pages than were fetched)
+    severity: critical=0 high=0 moderate=1 low=0 unrated=1
+    GHSA-xxxx-yyyy-zzzz    MODERATE  https://osv.dev/vulnerability/GHSA-xxxx-yyyy-zzzz
+      also known as: CVE-2024-0003
+      CVSS_V3: CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N
+    GHSA-aaaa-bbbb-cccc    unrated   https://osv.dev/vulnerability/GHSA-aaaa-bbbb-cccc
+  cvedetails     awaiting manual check
+    no entry recorded — Search the vendor; record CVE counts (https://www.cvedetails.com)
+  fedramp        ok
+    Okta Identity Cloud — FedRAMP Certified
+      impact: High  authorization: Agency (Rev5)
+      matched via alias: Okta Government Solutions (listed as Okta, Inc.)
+      https://marketplace.fedramp.gov/products/F1234567890
+  caag           ok
+    Okta, Inc. — breached 2021-08-01, 2021-08-17, reported 2021-08-23
+      found by searching: Okta
+      https://oag.ca.gov/ecrime/databreach/reports/sb24-000000
+  llm_research   ok
+    supplier       Okta is an identity provider.
+      https://www.okta.com/
+    service        Single sign-on.
+      https://www.okta.com/products/single-sign-on/
+    deployment     Cloud-hosted SaaS.
+      https://www.okta.com/
+    supplier site  https://www.okta.com/
+      https://www.okta.com/
+    service site   https://www.okta.com/products/single-sign-on/
+      https://www.okta.com/products/single-sign-on/
+    security page  https://www.okta.com/security/
+      https://www.okta.com/security/
+    notifications  https://status.okta.com/
+      https://status.okta.com/
+    headquarters   San Francisco, California, United States
+      https://www.okta.com/contact/
+    data residency Ireland
+      https://trust.okta.com/
+    lawsuit        A shareholder suit following the 2022 Lapsus$ disclosure. — dismissed (2024-03-01)
+      https://www.reuters.com/example
+    breach         January 2022 Lapsus$ compromise of a support engineer's laptop.
+      https://www.okta.com/blog/example/
+    kaspersky      no_evidence_found
+    moveit         yes
+                   Named in a MOVEit-related filing.
+      https://www.example.com/moveit
+    dropped: past_breaches[1]: dropped an uncited claim
+  ssllabs        ok
+    A+
+    no weak ciphers
+    recorded: 2026-08-12 by an analyst (https://www.ssllabs.com/ssltest)
+  openbugbounty  awaiting manual check
+    no entry recorded — Search the vendor domain; record open/fixed counts (https://www.openbugbounty.org)

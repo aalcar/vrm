@@ -15,7 +15,7 @@ criterion explicitly — not "looks good," but which criterion is satisfied by w
 **Do not run `git commit` or `git add`.** When a commit's worth of work is finished, say so
 and stop; the analyst reviews and commits. Suggesting a message is welcome.
 
-Phases 0–9 are complete. Phase 10 (CLI rendering) is next.
+Phases 0–10 are complete. Phase 11 (web UI) is next.
 
 **FedRAMP broke and recovered inside a day (2026-08-05).** The marketplace listing served a
 39 KB client-rendered SvelteKit shell for part of that day and `fedramp` failed loudly on
@@ -137,6 +137,16 @@ These come from the spec's guiding principles. Violating one is a bug even if te
   composed — Okta/SSO was the standing example of a vendor that could never be cached, and it
   caches six confirmed CPEs today. Keep the gate anyway. It is the backstop for the paths that
   still produce unverified CPEs: `nvd: false`, and a dictionary that was unreachable.
+- **A cached section is an answer about identifiers, not about a vendor.** The row is keyed on
+  `(company, service, source)` but the answer belongs to the CPEs NVD was queried with and the
+  domain BitSight was asked about, and those move under a key that does not. Each source
+  registers the entity fields it reads; they are fingerprinted into the stored payload, and a
+  row whose fingerprint disagrees with this run's is a miss. Without it `--cpe` silently did
+  nothing — the corrected run read yesterday's row back and showed CVEs for the very CPEs being
+  overridden. The fingerprint is order-sensitive on purpose (FedRAMP and CA AG cap how many
+  names they look up, so a reordering changes what gets queried) and scoped per source (a new
+  package must not throw away FedRAMP's 168h row). Cost: alternating overridden and plain runs
+  never hit each other, because one key holds one section. That is the right trade.
 - **A cached `Section.Data` must come back as its concrete type.** `json.Unmarshal` into an
   `any` yields a `map`, the renderer's type switch matches no case, and the section renders as
   a green heading with nothing under it. Decoding is table-driven per source and encoding is
@@ -145,6 +155,16 @@ These come from the spec's guiding principles. Violating one is a bug even if te
 - **A cache write gets its own context.** Fetching can consume a source's entire deadline;
   borrowing that context to record the result would make the most expensive answer in the tool
   the least likely to be cached. A cache failure warns and never fails a section.
+- **A truncated list says what it held back.** Detail rows are capped at ten with an explicit
+  `… +N more (use --full)` line, and the counts above them are always over everything rather
+  than over the printed rows. A list that simply stops reads as the complete answer — the same
+  failure as a silently dropped identifier, except here it understates a vendor's CVE count.
+- **`StatusSkipped` is rendered as two different things.** An automated source with nothing to
+  query is `unanswered`; a manual category with no recorded entry is `awaiting manual check`.
+  One is a gap in the data, the other is a task for the analyst, and labelling both "skipped"
+  makes them read every note to find the ones addressed to them. The distinction is drawn in
+  the renderer from the configured manual-source list — never by adding a fourth `Status`, which
+  a source has no way to set and the orchestrator has no reason to know.
 - **No editorializing.** Record values and citations. Severity judgments, timelines, and
   narrative are the analyst's job, not generated output.
 - **`html/template` only**, never `text/template`. Report data is externally sourced and

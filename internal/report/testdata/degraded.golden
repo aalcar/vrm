@@ -1,0 +1,40 @@
+query
+  company:   Some Vendor
+  service:   Widget
+  cache key: some vendor / widget
+
+resolved entity
+  canonical: Some Vendor
+  domains:   (none)
+  cpes:      (none)
+             no vendor token matched NVD's dictionary, so no CPE was queried
+  packages:  (none)
+  aliases:   (none)
+
+config config.yaml
+  models:    resolution=claude-sonnet-5 research=claude-sonnet-5
+  automated: bitsight, nvd, fedramp
+  manual:    ssllabs
+  optional credentials: NVD=absent (source will be skipped)
+  --no-cache: automated sources re-queried; manual entries untouched
+
+summary
+  6 categories: 2 answered, 2 failed, 1 unanswered, 1 awaiting a manual check
+  failed:     bitsight, llm_research
+  unanswered: nvd
+  awaiting:   ssllabs
+
+sections
+  bitsight       failed
+    error: BitSight rejected the credentials (HTTP 403); check BITSIGHT_API_KEY
+  nvd            unanswered
+    no CPEs resolved for this vendor
+  fedramp        ok
+    no listing for some vendor (searched 691 marketplace records)
+  caag           ok
+    no California-reported breaches for some vendor
+  llm_research   failed
+    error: the model returned no checklist fields
+    rerun with --no-cache to try again
+  ssllabs        awaiting manual check
+    no entry recorded — Scan the service hostname; record the grade (https://www.ssllabs.com/ssltest)

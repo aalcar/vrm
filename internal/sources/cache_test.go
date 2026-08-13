@@ -13,7 +13,7 @@ import (
 // behaviour here is what happens when the cache misbehaves, not when it works.
 type fakeCache struct {
 	mu     sync.Mutex
-	rows   map[string]Section
+	rows   map[string]cachedRow
 	reads  int
 	writes int
 	// writeCtxErr is sampled during the write rather than kept for the test to inspect
@@ -25,14 +25,23 @@ type fakeCache struct {
 	writeErr error
 }
 
-func newFakeCache() *fakeCache { return &fakeCache{rows: map[string]Section{}} }
+func newFakeCache() *fakeCache { return &fakeCache{rows: map[string]cachedRow{}} }
 
 func (f *fakeCache) key(company, service, source string) string {
 	return company + "\x00" + service + "\x00" + source
 }
 
+// cachedRow is a stored section plus the fingerprint of the identifiers it was computed from.
+// The store keeps one row per (company, service, source) and compares the fingerprint on read,
+// so the fake does the same — modelling it as part of the key would hide the fact that a
+// re-fingerprinted write replaces the old answer rather than sitting beside it.
+type cachedRow struct {
+	section Section
+	inputs  string
+}
+
 func (f *fakeCache) CachedSection(
-	_ context.Context, company, service, source string, _ time.Duration,
+	_ context.Context, company, service, source string, _ time.Duration, inputs string,
 ) (Section, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -40,12 +49,15 @@ func (f *fakeCache) CachedSection(
 	if f.readErr != nil {
 		return Section{}, false, f.readErr
 	}
-	section, ok := f.rows[f.key(company, service, source)]
-	return section, ok, nil
+	row, ok := f.rows[f.key(company, service, source)]
+	if !ok || row.inputs != inputs {
+		return Section{}, false, nil
+	}
+	return row.section, true, nil
 }
 
 func (f *fakeCache) PutSection(
-	ctx context.Context, company, service, source string, section Section,
+	ctx context.Context, company, service, source string, section Section, inputs string,
 ) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -54,7 +66,7 @@ func (f *fakeCache) PutSection(
 	if f.writeErr != nil {
 		return f.writeErr
 	}
-	f.rows[f.key(company, service, source)] = section
+	f.rows[f.key(company, service, source)] = cachedRow{section: section, inputs: inputs}
 	return nil
 }
 
@@ -119,6 +131,70 @@ func TestCacheHitDoesNotCallTheSource(t *testing.T) {
 	}
 	if got, ok := second.Data.(BitSightRating); !ok || got.Rating != 780 {
 		t.Errorf("cached Data is %#v", second.Data)
+	}
+}
+
+// TestASectionIsNotServedForIdentifiersItWasNotComputedFrom is the --cpe fix.
+//
+// The row is keyed on the vendor, but a BitSight rating is an answer about a domain and an NVD
+// section is an answer about a set of CPEs. An override exists so an analyst can correct a bad
+// mapping; without this, the corrected run reads yesterday's row back and shows the answer for
+// the identifiers being overridden, so the escape hatch silently does nothing.
+func TestASectionIsNotServedForIdentifiersItWasNotComputedFrom(t *testing.T) {
+	cache := newFakeCache()
+	inner := &countingSource{name: SourceBitSight, section: bitsightSection()}
+	src := Caching(inner, cache, time.Hour)
+	q := cacheTestQuery()
+
+	resolved := ResolvedEntity{Domains: []string{"okta.com"}}
+	overridden := ResolvedEntity{Domains: []string{"auth0.com"}}
+
+	if _, err := src.Fetch(context.Background(), q, resolved); err != nil {
+		t.Fatalf("first Fetch: %v", err)
+	}
+	section, err := src.Fetch(context.Background(), q, overridden)
+	if err != nil {
+		t.Fatalf("overridden Fetch: %v", err)
+	}
+	if section.Cached {
+		t.Error("a section computed from okta.com was served as the answer for auth0.com")
+	}
+	if n := inner.count(); n != 2 {
+		t.Errorf("the source was called %d times, want 2: the override must re-query", n)
+	}
+
+	// And the row now belongs to the override, so going back is a miss too. One key holds one
+	// section; a hit on the wrong identifiers costs more than a miss costs.
+	if _, err := src.Fetch(context.Background(), q, resolved); err != nil {
+		t.Fatalf("third Fetch: %v", err)
+	}
+	if n := inner.count(); n != 3 {
+		t.Errorf("the source was called %d times, want 3", n)
+	}
+}
+
+// TestUnchangedIdentifiersStillHit is the other half: the fingerprint must not be so brittle
+// that nothing ever caches. A separately-built entity holding the same identifiers is the same
+// question, and asking it twice is what the cache is for.
+func TestUnchangedIdentifiersStillHit(t *testing.T) {
+	cache := newFakeCache()
+	inner := &countingSource{name: SourceBitSight, section: bitsightSection()}
+	src := Caching(inner, cache, time.Hour)
+	q := cacheTestQuery()
+
+	for i := range 2 {
+		// Rebuilt each time rather than shared, so the fingerprint is compared by value.
+		ent := ResolvedEntity{
+			CanonicalName: "Okta, Inc.",
+			Domains:       []string{"okta.com", "auth0.com"},
+			CPEs:          []string{"cpe:2.3:a:okta:verify:*:*:*:*:*:*:*:*"},
+		}
+		if _, err := src.Fetch(context.Background(), q, ent); err != nil {
+			t.Fatalf("Fetch %d: %v", i, err)
+		}
+	}
+	if n := inner.count(); n != 1 {
+		t.Errorf("the source was called %d times, want 1", n)
 	}
 }
 
@@ -296,11 +372,11 @@ func TestTheCachedFlagIsNeverPersisted(t *testing.T) {
 	section := bitsightSection()
 	section.Cached = true
 
-	raw, err := EncodeSection(section)
+	raw, err := EncodeSection(section, "fingerprint")
 	if err != nil {
 		t.Fatalf("EncodeSection: %v", err)
 	}
-	got, err := DecodeSection(SourceBitSight, raw)
+	got, _, err := DecodeSection(SourceBitSight, raw)
 	if err != nil {
 		t.Fatalf("DecodeSection: %v", err)
 	}

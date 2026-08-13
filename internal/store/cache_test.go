@@ -11,6 +11,14 @@ import (
 	"github.com/aalcar/vrm/internal/sources"
 )
 
+// testInputs stands in for the fingerprint of the identifiers a section was computed from.
+// The store treats it as an opaque string — sources.SectionInputs decides what goes in it —
+// so these tests only need one stable value and one that differs from it.
+const (
+	testInputs  = "0ff1ce0ff1ce"
+	otherInputs = "deadbeefdead"
+)
+
 // cachedFixture is a section with something in every field that has to survive the trip.
 func cachedFixture() sources.Section {
 	return sources.OK(sources.SourceBitSight, sources.BitSightRating{
@@ -47,11 +55,11 @@ func TestCachedSectionRoundTrip(t *testing.T) {
 	company, service := uniqueQuery(t, st)
 	want := cachedFixture()
 
-	if err := st.PutSection(ctx, company, service, sources.SourceBitSight, want); err != nil {
+	if err := st.PutSection(ctx, company, service, sources.SourceBitSight, want, testInputs); err != nil {
 		t.Fatalf("PutSection: %v", err)
 	}
 
-	got, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour)
+	got, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour, testInputs)
 	if err != nil {
 		t.Fatalf("CachedSection: %v", err)
 	}
@@ -75,18 +83,18 @@ func TestCachedSectionExpiresAtTheTTLBoundary(t *testing.T) {
 	ctx := context.Background()
 	company, service := uniqueQuery(t, st)
 
-	if err := st.PutSection(ctx, company, service, sources.SourceBitSight, cachedFixture()); err != nil {
+	if err := st.PutSection(ctx, company, service, sources.SourceBitSight, cachedFixture(), testInputs); err != nil {
 		t.Fatalf("PutSection: %v", err)
 	}
 	backdate(t, st, company, service, sources.SourceBitSight, 2*time.Hour)
 
-	if _, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour); err != nil {
+	if _, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour, testInputs); err != nil {
 		t.Fatalf("CachedSection: %v", err)
 	} else if hit {
 		t.Error("a two-hour-old row was served under a one-hour TTL")
 	}
 
-	if _, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, 3*time.Hour); err != nil {
+	if _, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, 3*time.Hour, testInputs); err != nil {
 		t.Fatalf("CachedSection: %v", err)
 	} else if !hit {
 		t.Error("a two-hour-old row was not served under a three-hour TTL")
@@ -100,12 +108,12 @@ func TestCachedSectionWithoutATTLIsAlwaysAMiss(t *testing.T) {
 	ctx := context.Background()
 	company, service := uniqueQuery(t, st)
 
-	if err := st.PutSection(ctx, company, service, sources.SourceBitSight, cachedFixture()); err != nil {
+	if err := st.PutSection(ctx, company, service, sources.SourceBitSight, cachedFixture(), testInputs); err != nil {
 		t.Fatalf("PutSection: %v", err)
 	}
 
 	for _, ttl := range []time.Duration{0, -time.Hour} {
-		if _, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, ttl); err != nil {
+		if _, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, ttl, testInputs); err != nil {
 			t.Fatalf("CachedSection(%v): %v", ttl, err)
 		} else if hit {
 			t.Errorf("a TTL of %v produced a cache hit", ttl)
@@ -117,7 +125,7 @@ func TestCachedSectionMissesWhenNothingWasStored(t *testing.T) {
 	st := testStore(t)
 	company, service := uniqueQuery(t, st)
 
-	_, hit, err := st.CachedSection(context.Background(), company, service, sources.SourceNVD, time.Hour)
+	_, hit, err := st.CachedSection(context.Background(), company, service, sources.SourceNVD, time.Hour, testInputs)
 	if err != nil {
 		t.Fatalf("CachedSection: %v", err)
 	}
@@ -143,7 +151,7 @@ func TestCachedSectionIgnoresManualRows(t *testing.T) {
 		t.Fatalf("SetManual: %v", err)
 	}
 
-	_, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour)
+	_, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour, testInputs)
 	if err != nil {
 		t.Fatalf("CachedSection returned an error rather than a miss: %v", err)
 	}
@@ -163,7 +171,7 @@ func TestPutSectionRefusesToOverwriteAManualEntry(t *testing.T) {
 		t.Fatalf("SetManual: %v", err)
 	}
 
-	err := st.PutSection(ctx, company, service, sources.SourceBitSight, cachedFixture())
+	err := st.PutSection(ctx, company, service, sources.SourceBitSight, cachedFixture(), testInputs)
 	if err == nil {
 		t.Fatal("an automated write landed on a manual row without complaint")
 	}
@@ -187,7 +195,7 @@ func TestPutSectionRejectsAnUncacheableSource(t *testing.T) {
 	company, service := uniqueQuery(t, st)
 
 	err := st.PutSection(context.Background(), company, service, "ssllabs",
-		sources.OK("ssllabs", sources.ManualResult{Value: "A+"}))
+		sources.OK("ssllabs", sources.ManualResult{Value: "A+"}), testInputs)
 	if err == nil {
 		t.Fatal("wrote a section for a source with no codec")
 	}
@@ -209,8 +217,62 @@ func TestCachedSectionReportsAnUnreadableRow(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	if _, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour); err == nil {
+	if _, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour, testInputs); err == nil {
 		t.Errorf("an undecodable row reported hit=%v with no error", hit)
+	}
+}
+
+// TestCachedSectionMissesWhenTheIdentifiersChanged. The row is keyed on the vendor but the
+// answer is about the identifiers it was computed from, and those move — an analyst passes
+// --cpe, or the resolved mapping itself changes. Serving the old answer would make the
+// override silently do nothing.
+func TestCachedSectionMissesWhenTheIdentifiersChanged(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	company, service := uniqueQuery(t, st)
+
+	if err := st.PutSection(ctx, company, service, sources.SourceBitSight, cachedFixture(), testInputs); err != nil {
+		t.Fatalf("PutSection: %v", err)
+	}
+
+	// A miss, not an error: the row is perfectly readable, it just answers another question.
+	_, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour, otherInputs)
+	if err != nil {
+		t.Fatalf("CachedSection: %v", err)
+	}
+	if hit {
+		t.Error("a section computed from other identifiers was served as this run's answer")
+	}
+
+	// The same row is still there for the identifiers it was written under.
+	if _, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour, testInputs); err != nil || !hit {
+		t.Errorf("the original row stopped hitting: hit %v, err %v", hit, err)
+	}
+}
+
+// TestCachedSectionMissesARowWrittenBeforeFingerprinting pins the upgrade path. Such a row
+// decodes fine — it is well-formed — but carries no record of what it was computed from, so it
+// cannot be trusted to answer anything and expires on its first read.
+func TestCachedSectionMissesARowWrittenBeforeFingerprinting(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	company, service := uniqueQuery(t, st)
+
+	_, err := st.pool.Exec(ctx,
+		`INSERT INTO assessments_cache (company, service, source, section, manual)
+		 VALUES ($1, $2, $3, $4, false)`,
+		NormalizeKey(company), NormalizeKey(service), sources.SourceBitSight,
+		[]byte(`{"source":"bitsight","status":"ok","data":{"Rating":780}}`))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	_, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour, testInputs)
+	if err != nil {
+		t.Fatalf("an unfingerprinted row should be a miss, not an error: %v", err)
+	}
+	if hit {
+		t.Error("a row with no record of its identifiers was served")
 	}
 }
 
@@ -222,11 +284,11 @@ func TestCachedSectionNormalizesTheKey(t *testing.T) {
 	company, service := uniqueQuery(t, st)
 
 	if err := st.PutSection(ctx, "  "+strings.ToUpper(company)+" ", service,
-		sources.SourceBitSight, cachedFixture()); err != nil {
+		sources.SourceBitSight, cachedFixture(), testInputs); err != nil {
 		t.Fatalf("PutSection: %v", err)
 	}
 
-	_, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour)
+	_, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour, testInputs)
 	if err != nil {
 		t.Fatalf("CachedSection: %v", err)
 	}
@@ -308,7 +370,7 @@ func TestResolutionAndSectionsShareAKeyWithoutColliding(t *testing.T) {
 	if err := st.PutResolution(ctx, company, service, resolutionFixture()); err != nil {
 		t.Fatalf("PutResolution: %v", err)
 	}
-	if err := st.PutSection(ctx, company, service, sources.SourceBitSight, cachedFixture()); err != nil {
+	if err := st.PutSection(ctx, company, service, sources.SourceBitSight, cachedFixture(), testInputs); err != nil {
 		t.Fatalf("PutSection: %v", err)
 	}
 
@@ -320,7 +382,7 @@ func TestResolutionAndSectionsShareAKeyWithoutColliding(t *testing.T) {
 		t.Errorf("CanonicalName = %q", res.Entity.CanonicalName)
 	}
 
-	section, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour)
+	section, hit, err := st.CachedSection(ctx, company, service, sources.SourceBitSight, time.Hour, testInputs)
 	if err != nil || !hit {
 		t.Fatalf("CachedSection: hit %v, err %v", hit, err)
 	}
@@ -329,7 +391,7 @@ func TestResolutionAndSectionsShareAKeyWithoutColliding(t *testing.T) {
 	}
 
 	// And resolution is not reachable through the section reader, which has no codec for it.
-	if _, _, err := st.CachedSection(ctx, company, service, sources.ResolutionKey, time.Hour); err == nil {
+	if _, _, err := st.CachedSection(ctx, company, service, sources.ResolutionKey, time.Hour, testInputs); err == nil {
 		t.Error("the resolution row was readable as a section")
 	}
 }
