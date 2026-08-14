@@ -267,11 +267,9 @@ Two rules that aren't obvious from the schema:
 Every automated source is a passive lookup against an existing database. `vrm` never scans or
 probes vendor infrastructure.
 
-### Two things the design keeps insisting on
+### Notes
 
-**Partial failure is normal.** One source failing marks that section and nothing else. The
-assessment never aborts, siblings are never cancelled, and a report with a failed section is
-still a success.
+**Partial failure is normal.** One source failing marks that section and nothing else.
 
 **"We found nothing" and "we couldn't look" are different claims,** and they render
 identically if you're careless. NVD answers `200 / totalResults 0` both for a clean vendor and
