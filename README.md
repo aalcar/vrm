@@ -149,26 +149,30 @@ Sections arrive in completion order; the final `report` re-renders everything in
 `SectionOrder` with the summary and config. Payloads are split across `data:` lines — a bare
 newline terminates a field in the SSE wire format, and every fragment here is multi-line.
 
+Time runs downward. Solid arrows are requests, dashed arrows are what comes back.
+
 ```mermaid
 sequenceDiagram
     participant B as Browser
     participant W as vrmd
-    participant R as assess.Runner
     participant S as Sources
 
     B->>W: POST /assess (form)
     W-->>B: shell with sse-connect
     B->>W: GET /assess/stream (EventSource)
-    W->>R: Run(ctx, Request)
-    R->>R: resolve entity
+
+    W->>W: resolve entity
     W-->>B: event: entity
-    R->>S: fan out (concurrent)
-    S-->>R: section
+
+    W->>S: fan out, one goroutine per source
+    S-->>W: bitsight
     W-->>B: event: section
-    S-->>R: section
+    S-->>W: fedramp
     W-->>B: event: section
-    Note over R,S: one slow source never blocks the rest
-    R-->>W: Report
+    Note over W,S: a slow source holds up nothing but itself
+    S-->>W: llm_research
+    W-->>B: event: section
+
     W-->>B: event: report
     W-->>B: event: done
 ```
