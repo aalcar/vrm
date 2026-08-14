@@ -1,88 +1,66 @@
-# vrm — Vendor Risk Assessment Tool
+# vrm — vendor risk assessment
 
-`vrm` assesses third-party vendors for risk analysts. An analyst queries by **company**
-and **service**; the tool resolves that to machine identifiers, fans out to a fixed set of data
-sources, and returns a **concise, sourced risk report**.
+Query a vendor by **company** and **service**. `vrm` resolves that to machine identifiers
+(domain, CPE, package), queries a fixed set of sources concurrently, and returns a sourced
+report — in a terminal or a browser.
 
-The report is a **complete checklist**, not just the automatable subset. Categories the tool
-cannot query automatically still appear as sections, marked as analyst-supplied, so nothing
-silently drops off the assessment.
+The report is a complete checklist, not just the automatable part. Categories nothing can
+query still appear as sections marked for an analyst to fill in, so none of them quietly
+falls off the assessment.
 
-> `vrm` is decision-support, not a decision-maker. It surfaces sourced facts so a human
-> analyst can decide. Framing, severity judgments, and narrative are the analyst's job.
+> Decision-support, not a decision-maker. It surfaces sourced facts; severity judgments and
+> narrative are the analyst's job.
 
-**[`vrm-spec.md`](vrm-spec.md) is the source of truth.** Read it before implementing
-anything. [`CLAUDE.md`](CLAUDE.md) covers invariants and workflow.
+## Prerequisites
 
-## Status
+- **Go 1.26+**
+- **Docker** — runs the Postgres cache
+- **`ANTHROPIC_API_KEY`** — entity resolution and checklist research
+- **`BITSIGHT_API_KEY`** — security ratings
 
-**Phases 0–12 complete** — the whole spec. See spec §13 for the phased plan.
+`NVD_API_KEY` is optional and worth setting: it lifts NVD's rate limit from 5 to 50 requests
+per 30s. Without it NVD works, just slowly.
 
-`vrm assess` today resolves a company + service to machine identifiers via the Anthropic
-API, queries every source below concurrently, and prints a sourced report. Successful
-sections and the entity resolution are cached in Postgres under per-source TTLs, so a repeat
-assessment inside the TTL takes 0.05s against roughly 30s for a fresh one. `--no-cache`
-forces fresh calls; analyst-recorded manual entries never expire and are never cleared by it.
-
-Both front-ends run the same pipeline (`internal/assess.Runner`) and label sections from the
-same code (`internal/report`), so a skip means the same thing in a terminal and a browser.
-
-| Source | Keyed on | State |
-|---|---|---|
-| BitSight | domain | ✅ security rating, industry comparison |
-| NVD | CPE 2.3 | ✅ CVEs with CVSS scores + severity counts |
-| OSV | package + ecosystem | ✅ advisories for vendor-published OSS |
-| FedRAMP | company name | ✅ authorization status per offering (scrape) |
-| CA Attorney General | company name | ✅ California-reported breaches (scrape) |
-| LLM research | company + service | ✅ fixed checklist, every claim cited (max 2 sources each) |
-| CVE Details / SSL Labs / Open Bug Bounty | — | ✅ manual, by design — `vrm set` |
-
-## Web UI
+## Quick start
 
 ```bash
-go run ./cmd/vrmd            # listens on config.yaml's `listen` (:8080), or pass --listen
+docker compose up -d       # Postgres on host port 5433
+cp .env.example .env       # fill in ANTHROPIC_API_KEY and BITSIGHT_API_KEY
 ```
 
-A form and a report, server-rendered with `html/template` and swapped in by HTMX. Every value
-on the page came from a vendor API, a scraped page, or a language model, so nothing is ever
-wrapped in `template.HTML` — multi-line values are handled with CSS. There is no auth and no
-TLS termination by design (spec §2); run it on localhost or behind something that has them.
+`DATABASE_URL` in `.env.example` already points at the compose Postgres — leave it alone
+unless you're using your own.
 
-Sections stream in as each source returns, over SSE. `POST /assess` runs nothing — it returns a
-shell whose `sse-connect` points at `GET /assess/stream`, because EventSource can only issue a
-GET — and the stream emits the resolved entity first, then a section per source in completion
-order, then the finished report in `SectionOrder` replacing the lot. A real run: the entity at
-6.6s, eight sources by 7.9s, and `llm_research` at 30.2s. Nothing waits on the slow one.
-
-The server sets no `WriteTimeout`: any value not larger than `timeouts.total` would cut the
-most expensive reports off mid-stream with a 200 already sent.
-
-## Setup
-
-Requires Go 1.26+ and Docker.
+Then either front-end:
 
 ```bash
-docker compose up -d          # Postgres for the assessments cache (host port 5433)
-cp .env.example .env          # then fill in ANTHROPIC_API_KEY and BITSIGHT_API_KEY
+go run ./cmd/vrm assess "Okta" --service "SSO"    # terminal
+go run ./cmd/vrmd                                 # browser, http://localhost:8080
 ```
 
-`NVD_API_KEY` is optional and worth setting: it raises NVD's rate limit from 5 to 50
-requests per 30 seconds. Without it NVD still works, just slowly.
+Both hit the same pipeline and label sections identically. A first run takes ~30s; a repeat
+inside the cache TTL takes ~0.05s.
 
-Secrets are environment-only and never belong in `config.yaml`. `.env` is gitignored;
-`.env.example` is the committed template. Missing required variables fail at startup with a
-clear message listing all of them.
+Secrets are environment-only and are never read from `config.yaml`. Missing ones fail at
+startup with all of them named at once.
 
-Non-secret settings — model, source toggles, cache TTLs, timeouts — live in `config.yaml`.
+## CLI
 
-## Usage
-
-```bash
-go run ./cmd/vrm assess "Okta" --service "SSO"
+```
+vrm assess "<company>" --service "<service>" [flags]
+vrm set    "<company>" --service "<service>" --source <name> --value "<text>"
 ```
 
-The report opens with the resolved identifiers, then a summary, then one section per
-category:
+| Flag | Effect |
+|---|---|
+| `--service` | required |
+| `--domain` | override the resolved domain (BitSight) |
+| `--cpe` | override the resolved CPEs (NVD), comma-separated |
+| `--no-cache` | re-query automated sources; analyst entries are never cleared |
+| `--full` | print every detail row instead of capping long lists |
+| `--config` | config file path (default `config.yaml`) |
+
+The report opens with the resolved identifiers, then a summary:
 
 ```
 summary
@@ -92,115 +70,102 @@ summary
   awaiting:   ssllabs
 ```
 
-Those last two are both `StatusSkipped` underneath and they mean different things.
-`unanswered` is a gap in the data — nothing to query, or a credential absent — and
-`awaiting manual check` is a task assigned to you. Every section says which it is on its own
-line, so no category ever drops off silently.
+`unanswered` and `awaiting manual check` are both skips underneath and mean different things:
+the first is a gap in the data, the second is a task for you.
 
-Long lists (CVEs, OSV advisories, breach filings) are capped at ten rows and say what they
-held back — `… +12 more (use --full)`. The severity counts above them are always over
-everything, never over the printed rows. `--full` prints the lot.
+Long lists cap at ten rows and say what they held back (`… +12 more (use --full)`); the
+severity counts above them always cover everything. Outcome labels are colored on a terminal
+and never when redirected; `NO_COLOR` disables them.
 
-Outcome labels are colored on a terminal and never when the output is redirected; `NO_COLOR`
-turns them off entirely. Only the tool's own state is colored — never vendor data, because
-painting a CRITICAL red would be `vrm` making a severity claim on top of the one NVD already
-made. Nothing is conveyed by color alone.
-
-Categories that are not automatable appear as sections telling you what to check and where.
-Record an answer and it renders verbatim from then on:
+Record a manual answer and it renders verbatim from then on:
 
 ```bash
 go run ./cmd/vrm set "Okta" --service "SSO" --source ssllabs --value "A+"
 ```
 
-Entity resolution is the weakest link in the pipeline — a wrong CPE silently returns another
-vendor's CVEs — so the resolved identifiers are printed above the results, and two flags let
-you correct a bad mapping without editing code:
+## Web
 
-```bash
---domain okta.com                        # override the resolved domain (BitSight)
---cpe cpe:2.3:a:okta:access_gateway      # override the resolved CPEs (NVD), comma-separated
-```
+`go run ./cmd/vrmd` serves a form and a report on `config.yaml`'s `listen` (`:8080`), or pass
+`--listen`. Sections stream in over SSE as each source returns — the resolved entity first,
+then a section per source as it lands, then the finished report. On a real run the entity
+arrives at 6.6s, eight sources by 7.9s, and the slow research call at 30.2s.
 
-`--cpe` accepts the short `cpe:2.3:<part>:<vendor>:<product>` form. Both overrides re-query
-the sources that read them: a cached section records which identifiers produced it, so an
-override never reads back the answer it was meant to correct.
+**No auth, no TLS** — deliberately out of scope (spec §2). Run it on localhost or behind
+something that provides both.
 
-### The model does not write CPEs
+## Configuration
 
-Asking a model to compose a CPE product token asks it to recall a string, and it invents one
-when it can't. Across six consecutive Okta runs the same prompt returned no CPE four times
-and a fabricated one twice — and a wrong CPE returns another vendor's CVEs while nothing
-fails.
+Non-secret settings live in `config.yaml`: models, source toggles, cache TTLs, timeouts,
+manual-source definitions, listen address. Adding a manual source is a config entry, not code.
 
-So resolution is inverted. The model proposes a **vendor** token; NVD's CPE dictionary is
-asked which products it actually registers under that vendor; the model **chooses from that
-list**; and every choice is checked for membership before it can reach the entity. A token
-that isn't in the catalogue is dropped as invented and named in the report. The catalogue is
-a hard ceiling on what can be queried, and a truncated one says so — "nothing matched" is a
-weaker claim when only the first page was read.
+| Variable | Required | Purpose |
+|---|---|---|
+| `DATABASE_URL` | yes | Postgres cache |
+| `ANTHROPIC_API_KEY` | yes | entity resolution, checklist research |
+| `BITSIGHT_API_KEY` | yes | security ratings |
+| `NVD_API_KEY` | no | raises NVD's rate limit |
 
-Okta/SSO went from an invented CPE to six real ones, identical across three runs. The escape
-hatch is still `--cpe`, for the cases the dictionary cannot settle.
+## Sources
+
+| Source | Keyed on | Returns |
+|---|---|---|
+| BitSight | domain | security rating, industry comparison |
+| NVD | CPE 2.3 | CVEs with CVSS scores + severity counts |
+| OSV | package + ecosystem | advisories for vendor-published OSS |
+| FedRAMP | company name | authorization status per offering (scrape) |
+| CA Attorney General | company name | California-reported breaches (scrape) |
+| LLM research | company + service | fixed checklist, every claim cited |
+| CVE Details, SSL Labs, Open Bug Bounty | — | manual by design — `vrm set` |
+
+The set is fixed (spec §6, §7). Every automated source is a passive lookup against an existing
+database; `vrm` never scans or probes vendor infrastructure.
+
+**Known gap:** BitSight's company directory is global but ratings are entitlement-scoped, so a
+vendor outside your subscription returns HTTP 403 with a valid key. The report says so rather
+than blaming the credential.
 
 ## Development
 
 ```bash
-go build ./...          # compiles — the floor, not a pass
-go vet ./...            # static checks
-go test -race ./...     # ALWAYS -race; the fan-out is concurrent
-gofmt -l .              # lists unformatted files; -w to fix
+go build ./...
+go vet ./...
+go test -race ./...     # always -race; the fan-out is concurrent
+gofmt -l .              # -w to fix
 ```
 
-`go test -race ./...` is the default test command for this project. A test run without
-`-race` proves very little here.
-
-Build phase by phase in spec order. Implement one phase, meet its acceptance criteria, then
-stop for review.
+[`vrm-spec.md`](vrm-spec.md) is the source of truth. [`CLAUDE.md`](CLAUDE.md) covers the
+invariants — read it before changing anything under `internal/`.
 
 ## Architecture
 
-The core is a library; the interfaces are thin front-ends over it.
+```
+cmd/vrm            CLI (assess, set)
+cmd/vrmd           web server
+internal/assess    the pipeline: resolve → fan out → aggregate → record
+internal/sources   one file per source, behind a common Source interface
+internal/store     Postgres cache and analyst-supplied manual entries
+internal/report    terminal renderer + the outcome/summary logic both UIs share
+internal/web       handlers, SSE stream, embedded templates
+```
 
-- `cmd/vrm` — CLI (`assess`, `set`)
-- `cmd/vrmd` — web server (Go `html/template` + HTMX, SSE progress)
-- `internal/assess` — the pipeline: resolve → fan-out → aggregate → record. Both front-ends
-  call `Runner.Run`; it owns the single shared `*sources.NVD`
-- `internal/sources` — one file per source, all behind a common `Source` interface
-- `internal/store` — Postgres cache and analyst-supplied manual entries
-- `internal/report` — the terminal renderer and the outcome/summary logic both UIs share,
-  pinned by golden files in `internal/report/testdata`
-- `internal/web` — handlers, SSE stream, and embedded templates for the browser
-
-Data sources are a **fixed** set (spec §6 and §7). Every automated source is a passive
-lookup against an existing database — `vrm` never scans or probes vendor infrastructure.
-Some categories are deliberately **manual**: CVE Details, SSL Labs and Open Bug Bounty
-appear as checklist sections an analyst fills in with `vrm set`, not as HTTP clients to be
-written later. Adding another manual source is a `config.yaml` entry, not code.
+Both front-ends call `assess.Runner.Run`, which owns the single shared `*sources.NVD` — the
+rate limiter is a field on it, and two instances would split one budget and earn a 403.
 
 ### Two things the design keeps insisting on
 
-**Partial failure is normal.** One source failing marks that section and nothing else; the
-assessment never aborts and siblings are never cancelled. A report with a failed section is
-a success. `StatusSkipped` is a first-class outcome too — most vendors publish no OSS, so
-skipping OSV is correct behavior, not a gap.
+**Partial failure is normal.** One source failing marks that section and nothing else. The
+assessment never aborts, siblings are never cancelled, and a report with a failed section is
+still a success.
 
-**"We found nothing" and "we couldn't look" are different claims.** They render identically
-if you're careless. NVD answers `200 / totalResults 0` both for a vendor with no CVEs and
-for a CPE that doesn't exist, so `vrm` confirms the CPE against NVD's dictionary before
-reporting a zero. The FedRAMP scrape checks how many records it parsed before reporting a
-vendor as unlisted, and the CA AG scrape requires the page's own "no results" marker.
-Identifiers that fail validation are dropped *and named* — a silently discarded CPE looks
-exactly like a vendor that has none.
-
-**Nothing the model asserts is taken on trust.** Research answers are checked against the
-URLs the web-search tool actually returned; a citation that was never in those results is
-dropped as fabricated, and a claim left without one is dropped with it. That guard is not a
-formality — invented citations turn up in a meaningful fraction of runs. An uncited "yes" on
-the two questions a model is most likely to confabulate — Kaspersky use and MOVEit
-exposure — is downgraded to `no_evidence_found` rather than shown, and a checklist where
-nothing could be answered is reported as a failed lookup rather than a clean vendor.
+**"We found nothing" and "we couldn't look" are different claims,** and they render
+identically if you're careless. NVD answers `200 / totalResults 0` both for a clean vendor and
+for a CPE that doesn't exist — so CPEs are sourced from NVD's own dictionary rather than
+composed by the model, and every one is checked for membership before it can be queried. The
+FedRAMP scrape checks how many records it parsed before calling a vendor unlisted. Research
+citations are matched against the URLs the search tool actually returned, and an unmatched one
+is dropped as fabricated. Identifiers that fail any of this are dropped *and named* — a
+silently discarded CPE looks exactly like a vendor that never had one.
 
 Deterministic data never passes through the LLM. Ratings, CVE records and registry statuses
-are interpolated verbatim; the model resolves entities and researches the checklist, and
-does not restate, summarize, or recompute anything the other sources returned.
+are interpolated verbatim; the model resolves entities and researches the checklist, and does
+not restate or recompute anything another source returned.
